@@ -1,717 +1,591 @@
+
 /**
- * Animations Module
- * Handles visual effects, transitions, and hardware-accelerated animations
+ * Animations Module - Handles all visual effects and animations
+ * Implements performance-optimized animations with reduced motion support
  */
 
-import { logError, logDev, startPerformanceTimer, endPerformanceTimer } from './testing.js';
+import { logDev } from './testing.js';
 
 // Animation configuration
 const ANIMATION_CONFIG = {
-  reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-  defaultDuration: 300,
-  easing: {
-    easeOut: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)',
-    easeIn: 'cubic-bezier(0.55, 0.055, 0.675, 0.19)',
-    easeInOut: 'cubic-bezier(0.645, 0.045, 0.355, 1)',
-    bounce: 'cubic-bezier(0.68, -0.55, 0.265, 1.55)',
-    elastic: 'cubic-bezier(0.68, -0.6, 0.32, 1.6)'
+  slapButton: {
+    duration: 150,
+    scale: 0.95,
+    glowIntensity: 1.5
+  },
+  floatingPoints: {
+    duration: 2000,
+    distance: 100,
+    fadeStart: 0.7
+  },
+  combo: {
+    duration: 1000,
+    pulseScale: 1.2,
+    glowDuration: 2000
+  },
+  powerUp: {
+    duration: 800,
+    particles: 12,
+    colors: ['#00ff88', '#ff0088', '#0088ff', '#ffaa00']
+  },
+  achievement: {
+    duration: 3000,
+    bounceScale: 1.1,
+    glowPulses: 3
   }
 };
 
 // Animation state
-let animationFrameId = null;
+let animationQueue = [];
+let isReducedMotion = false;
 let activeAnimations = new Set();
-let particleSystem = null;
-let isInitialized = false;
-
-// Particle system for visual effects
-class ParticleSystem {
-  constructor() {
-    this.particles = [];
-    this.canvas = null;
-    this.ctx = null;
-    this.isRunning = false;
-    this.lastTime = 0;
-  }
-
-  init() {
-    // Create canvas for particle effects
-    this.canvas = document.createElement('canvas');
-    this.canvas.className = 'particle-canvas';
-    this.canvas.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      pointer-events: none;
-      z-index: 1000;
-      width: 100%;
-      height: 100%;
-    `;
-    
-    document.body.appendChild(this.canvas);
-    this.ctx = this.canvas.getContext('2d');
-    
-    this.resize();
-    window.addEventListener('resize', () => this.resize());
-  }
-
-  resize() {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = this.canvas.getBoundingClientRect();
-    
-    this.canvas.width = rect.width * dpr;
-    this.canvas.height = rect.height * dpr;
-    
-    this.ctx.scale(dpr, dpr);
-    this.canvas.style.width = rect.width + 'px';
-    this.canvas.style.height = rect.height + 'px';
-  }
-
-  addParticle(x, y, type = 'default', options = {}) {
-    const particle = {
-      id: Math.random().toString(36).substr(2, 9),
-      x: x,
-      y: y,
-      vx: (Math.random() - 0.5) * 4,
-      vy: (Math.random() - 0.5) * 4 - 2,
-      life: 1.0,
-      decay: options.decay || 0.02,
-      size: options.size || 4,
-      color: options.color || '#00ff88',
-      type: type,
-      gravity: options.gravity || 0.1,
-      opacity: options.opacity || 1,
-      ...options
-    };
-
-    this.particles.push(particle);
-    
-    if (!this.isRunning) {
-      this.start();
-    }
-  }
-
-  addBurst(x, y, count = 10, options = {}) {
-    for (let i = 0; i < count; i++) {
-      const angle = (Math.PI * 2 * i) / count;
-      const speed = options.speed || 3;
-      
-      this.addParticle(x, y, 'burst', {
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        color: options.color || '#00ff88',
-        size: options.size || 3,
-        ...options
-      });
-    }
-  }
-
-  update(deltaTime) {
-    this.particles = this.particles.filter(particle => {
-      // Update position
-      particle.x += particle.vx * deltaTime * 0.016;
-      particle.y += particle.vy * deltaTime * 0.016;
-      
-      // Apply gravity
-      particle.vy += particle.gravity * deltaTime * 0.016;
-      
-      // Update life
-      particle.life -= particle.decay * deltaTime * 0.016;
-      
-      // Remove dead particles
-      return particle.life > 0;
-    });
-  }
-
-  render() {
-    if (!this.ctx) return;
-    
-    // Clear canvas
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    
-    // Render particles
-    this.particles.forEach(particle => {
-      this.ctx.save();
-      
-      const alpha = particle.life * particle.opacity;
-      this.ctx.globalAlpha = alpha;
-      
-      switch (particle.type) {
-        case 'spark':
-          this.renderSpark(particle);
-          break;
-        case 'glow':
-          this.renderGlow(particle);
-          break;
-        default:
-          this.renderDefault(particle);
-      }
-      
-      this.ctx.restore();
-    });
-  }
-
-  renderDefault(particle) {
-    this.ctx.fillStyle = particle.color;
-    this.ctx.beginPath();
-    this.ctx.arc(particle.x, particle.y, particle.size * particle.life, 0, Math.PI * 2);
-    this.ctx.fill();
-  }
-
-  renderSpark(particle) {
-    const gradient = this.ctx.createRadialGradient(
-      particle.x, particle.y, 0,
-      particle.x, particle.y, particle.size
-    );
-    gradient.addColorStop(0, particle.color);
-    gradient.addColorStop(1, 'transparent');
-    
-    this.ctx.fillStyle = gradient;
-    this.ctx.beginPath();
-    this.ctx.arc(particle.x, particle.y, particle.size * particle.life, 0, Math.PI * 2);
-    this.ctx.fill();
-  }
-
-  renderGlow(particle) {
-    this.ctx.shadowBlur = 20;
-    this.ctx.shadowColor = particle.color;
-    this.ctx.fillStyle = particle.color;
-    this.ctx.beginPath();
-    this.ctx.arc(particle.x, particle.y, particle.size * particle.life, 0, Math.PI * 2);
-    this.ctx.fill();
-  }
-
-  start() {
-    if (this.isRunning) return;
-    
-    this.isRunning = true;
-    this.lastTime = performance.now();
-    this.animate();
-  }
-
-  stop() {
-    this.isRunning = false;
-    if (animationFrameId) {
-      cancelAnimationFrame(animationFrameId);
-      animationFrameId = null;
-    }
-  }
-
-  animate() {
-    if (!this.isRunning) return;
-    
-    const currentTime = performance.now();
-    const deltaTime = currentTime - this.lastTime;
-    this.lastTime = currentTime;
-    
-    this.update(deltaTime);
-    this.render();
-    
-    // Stop if no particles
-    if (this.particles.length === 0) {
-      this.stop();
-    } else {
-      animationFrameId = requestAnimationFrame(() => this.animate());
-    }
-  }
-
-  clear() {
-    this.particles = [];
-    if (this.ctx) {
-      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    }
-  }
-
-  destroy() {
-    this.stop();
-    this.clear();
-    if (this.canvas && this.canvas.parentNode) {
-      this.canvas.parentNode.removeChild(this.canvas);
-    }
-  }
-}
 
 /**
- * Initialize animation system
+ * Initialize animations system
  */
 export function initAnimations() {
-  try {
-    logDev('🎬 Initializing animation system...');
-
-    // Check for reduced motion preference
-    if (ANIMATION_CONFIG.reducedMotion) {
-      logDev('Reduced motion preferred - limiting animations');
-    }
-
-    // Initialize particle system
-    if (!ANIMATION_CONFIG.reducedMotion) {
-      particleSystem = new ParticleSystem();
-      particleSystem.init();
-    }
-
-    // Set up CSS custom properties for animations
-    setupAnimationCSS();
-
-    isInitialized = true;
-    logDev('✅ Animation system initialized');
-
-  } catch (error) {
-    logError('Error initializing animations:', error);
-  }
-}
-
-/**
- * Set up CSS custom properties for consistent animations
- */
-function setupAnimationCSS() {
-  const style = document.createElement('style');
-  style.textContent = `
-    :root {
-      --animation-duration-fast: ${ANIMATION_CONFIG.reducedMotion ? '0.01s' : '0.15s'};
-      --animation-duration-normal: ${ANIMATION_CONFIG.reducedMotion ? '0.01s' : '0.3s'};
-      --animation-duration-slow: ${ANIMATION_CONFIG.reducedMotion ? '0.01s' : '0.6s'};
-      --animation-easing-ease-out: ${ANIMATION_CONFIG.easing.easeOut};
-      --animation-easing-bounce: ${ANIMATION_CONFIG.easing.bounce};
-      --animation-easing-elastic: ${ANIMATION_CONFIG.easing.elastic};
-    }
-    
-    .animate-slap {
-      animation: slapAnimation var(--animation-duration-slow) var(--animation-easing-bounce);
-    }
-    
-    .animate-score-bump {
-      animation: scoreBumpAnimation var(--animation-duration-normal) var(--animation-easing-bounce);
-    }
-    
-    .animate-combo {
-      animation: comboAnimation var(--animation-duration-normal) var(--animation-easing-elastic);
-    }
-    
-    .animate-powerup {
-      animation: powerupAnimation var(--animation-duration-slow) var(--animation-easing-bounce);
-    }
-    
-    .animate-fade-in {
-      animation: fadeInAnimation var(--animation-duration-normal) var(--animation-easing-ease-out);
-    }
-    
-    .animate-slide-up {
-      animation: slideUpAnimation var(--animation-duration-normal) var(--animation-easing-ease-out);
-    }
-    
-    @keyframes slapAnimation {
-      0% { transform: scale(1) rotate(0deg); }
-      25% { transform: scale(0.95) rotate(-2deg); }
-      50% { transform: scale(1.1) rotate(2deg); }
-      75% { transform: scale(0.98) rotate(-1deg); }
-      100% { transform: scale(1) rotate(0deg); }
-    }
-    
-    @keyframes scoreBumpAnimation {
-      0% { transform: scale(1); }
-      50% { transform: scale(1.2); }
-      100% { transform: scale(1); }
-    }
-    
-    @keyframes comboAnimation {
-      0% { transform: scale(1) translateY(0); opacity: 0.8; }
-      50% { transform: scale(1.3) translateY(-10px); opacity: 1; }
-      100% { transform: scale(1) translateY(0); opacity: 0.9; }
-    }
-    
-    @keyframes powerupAnimation {
-      0% { transform: scale(0) rotate(0deg); opacity: 0; }
-      50% { transform: scale(1.2) rotate(180deg); opacity: 1; }
-      100% { transform: scale(1) rotate(360deg); opacity: 1; }
-    }
-    
-    @keyframes fadeInAnimation {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    
-    @keyframes slideUpAnimation {
-      from { transform: translateY(20px); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-  `;
+  // Check for reduced motion preference
+  isReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   
-  document.head.appendChild(style);
+  // Listen for changes in motion preferences
+  window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', (e) => {
+    isReducedMotion = e.matches;
+    
+    if (isReducedMotion) {
+      // Cancel all active animations
+      activeAnimations.forEach(animation => {
+        if (animation.cancel) animation.cancel();
+      });
+      activeAnimations.clear();
+    }
+  });
+  
+  // Create particle system container
+  createParticleContainer();
+  
+  // Set up CSS custom properties for animations
+  setupAnimationVariables();
+  
+  logDev('✅ Animations system initialized', { reducedMotion: isReducedMotion });
 }
 
 /**
  * Trigger slap button animation
  */
-export function triggerSlapAnimation() {
-  if (!isInitialized) return;
-
-  startPerformanceTimer('slapAnimation');
-
-  try {
-    const slapButton = document.getElementById('slap-btn');
-    if (!slapButton) return;
-
-    // Add CSS animation class
-    slapButton.classList.add('animate-slap');
-    
-    // Add particle effect
-    if (particleSystem && !ANIMATION_CONFIG.reducedMotion) {
-      const rect = slapButton.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
-      
-      particleSystem.addBurst(centerX, centerY, 8, {
-        color: '#00ff88',
-        size: 3,
-        speed: 4,
-        decay: 0.03
-      });
-    }
-
-    // Clean up animation class
-    setTimeout(() => {
-      slapButton.classList.remove('animate-slap');
-    }, 600);
-
-  } catch (error) {
-    logError('Error triggering slap animation:', error);
-  }
-
-  endPerformanceTimer('slapAnimation');
-}
-
-/**
- * Trigger score bump animation
- */
-export function triggerScoreBump() {
-  if (!isInitialized) return;
-
-  try {
-    const scoreElement = document.getElementById('score-value');
-    if (!scoreElement) return;
-
-    scoreElement.classList.add('animate-score-bump');
-    
-    setTimeout(() => {
-      scoreElement.classList.remove('animate-score-bump');
-    }, 300);
-
-  } catch (error) {
-    logError('Error triggering score bump:', error);
-  }
+export function triggerSlapAnimation(points = 1) {
+  const button = document.getElementById('slap-btn');
+  if (!button || isReducedMotion) return;
+  
+  // Button press effect
+  const pressAnimation = button.animate([
+    { transform: 'scale(1)', filter: 'drop-shadow(0 0 10px var(--neon-green))' },
+    { transform: `scale(${ANIMATION_CONFIG.slapButton.scale})`, filter: 'drop-shadow(0 0 20px var(--neon-green))' },
+    { transform: 'scale(1)', filter: 'drop-shadow(0 0 10px var(--neon-green))' }
+  ], {
+    duration: ANIMATION_CONFIG.slapButton.duration,
+    easing: 'cubic-bezier(0.68, -0.55, 0.265, 1.55)'
+  });
+  
+  activeAnimations.add(pressAnimation);
+  
+  pressAnimation.addEventListener('finish', () => {
+    activeAnimations.delete(pressAnimation);
+  });
+  
+  // Create ripple effect
+  createRippleEffect(button);
+  
+  // Trigger floating points
+  triggerFloatingPoints(points, button);
 }
 
 /**
  * Trigger combo animation
  */
-export function triggerComboAnimation(comboLevel) {
-  if (!isInitialized) return;
-
-  try {
-    const comboElement = document.getElementById('combo-value');
-    if (!comboElement) return;
-
-    comboElement.classList.add('animate-combo');
-    
-    // Add particles based on combo level
-    if (particleSystem && !ANIMATION_CONFIG.reducedMotion && comboLevel > 5) {
-      const rect = comboElement.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
-      
-      const particleCount = Math.min(comboLevel, 15);
-      const colors = ['#00ff88', '#00c1ff', '#ff9500'];
-      const color = colors[Math.floor(comboLevel / 5) % colors.length];
-      
-      particleSystem.addBurst(centerX, centerY, particleCount, {
-        color: color,
-        size: 2 + comboLevel * 0.1,
-        speed: 2 + comboLevel * 0.2,
-        decay: 0.025
-      });
-    }
-    
-    setTimeout(() => {
-      comboElement.classList.remove('animate-combo');
-    }, 300);
-
-  } catch (error) {
-    logError('Error triggering combo animation:', error);
+export function triggerComboAnimation(combo) {
+  const comboEl = document.getElementById('combo');
+  if (!comboEl || isReducedMotion) return;
+  
+  // Combo pulse effect
+  const pulseAnimation = comboEl.animate([
+    { transform: 'scale(1)', filter: 'none' },
+    { transform: `scale(${ANIMATION_CONFIG.combo.pulseScale})`, filter: 'drop-shadow(0 0 15px var(--electric-blue))' },
+    { transform: 'scale(1)', filter: 'none' }
+  ], {
+    duration: ANIMATION_CONFIG.combo.duration,
+    easing: 'ease-out'
+  });
+  
+  activeAnimations.add(pulseAnimation);
+  
+  // Create combo particles
+  if (combo > 5) {
+    createComboParticles(comboEl, combo);
   }
+  
+  // Screen shake for high combos
+  if (combo > 10) {
+    triggerScreenShake();
+  }
+  
+  pulseAnimation.addEventListener('finish', () => {
+    activeAnimations.delete(pulseAnimation);
+  });
 }
 
 /**
- * Trigger power-up animation
+ * Trigger power-up activation animation
  */
-export function triggerPowerUpAnimation(powerUpId) {
-  if (!isInitialized) return;
+export function triggerPowerUpAnimation(powerUpId, element) {
+  if (!element || isReducedMotion) return;
+  
+  // Power-up activation effect
+  const activationAnimation = element.animate([
+    { transform: 'scale(1) rotate(0deg)', filter: 'brightness(1)' },
+    { transform: 'scale(1.1) rotate(5deg)', filter: 'brightness(1.5) drop-shadow(0 0 20px var(--neon-green))' },
+    { transform: 'scale(1) rotate(0deg)', filter: 'brightness(1.2)' }
+  ], {
+    duration: ANIMATION_CONFIG.powerUp.duration,
+    easing: 'cubic-bezier(0.68, -0.55, 0.265, 1.55)'
+  });
+  
+  activeAnimations.add(activationAnimation);
+  
+  // Create power-up particles
+  createPowerUpParticles(element, powerUpId);
+  
+  activationAnimation.addEventListener('finish', () => {
+    activeAnimations.delete(activationAnimation);
+  });
+}
 
-  try {
-    const powerUpElements = document.querySelectorAll('.powerup-card');
-    powerUpElements.forEach(element => {
-      if (element.dataset.powerupId === powerUpId) {
-        element.classList.add('animate-powerup');
-        
-        // Add spectacular particle effect
-        if (particleSystem && !ANIMATION_CONFIG.reducedMotion) {
-          const rect = element.getBoundingClientRect();
-          const centerX = rect.left + rect.width / 2;
-          const centerY = rect.top + rect.height / 2;
-          
-          // Multiple bursts for power-up activation
-          for (let i = 0; i < 3; i++) {
-            setTimeout(() => {
-              particleSystem.addBurst(centerX, centerY, 12, {
-                color: '#ffff00',
-                size: 4,
-                speed: 5,
-                decay: 0.02,
-                type: 'glow'
-              });
-            }, i * 200);
-          }
-        }
-        
-        setTimeout(() => {
-          element.classList.remove('animate-powerup');
-        }, 600);
-      }
+/**
+ * Trigger achievement unlock animation
+ */
+export function triggerAchievementAnimation(achievementId) {
+  if (isReducedMotion) return;
+  
+  // Create achievement popup
+  const popup = createAchievementPopup(achievementId);
+  document.body.appendChild(popup);
+  
+  // Animate popup entrance
+  const entranceAnimation = popup.animate([
+    { 
+      transform: 'translate(-50%, -50%) scale(0) rotate(-180deg)', 
+      opacity: 0,
+      filter: 'blur(10px)'
+    },
+    { 
+      transform: 'translate(-50%, -50%) scale(1.1) rotate(0deg)', 
+      opacity: 1,
+      filter: 'blur(0px)'
+    },
+    { 
+      transform: 'translate(-50%, -50%) scale(1) rotate(0deg)', 
+      opacity: 1,
+      filter: 'blur(0px)'
+    }
+  ], {
+    duration: ANIMATION_CONFIG.achievement.duration * 0.3,
+    easing: 'cubic-bezier(0.68, -0.55, 0.265, 1.55)'
+  });
+  
+  activeAnimations.add(entranceAnimation);
+  
+  // Auto-remove after delay
+  setTimeout(() => {
+    const exitAnimation = popup.animate([
+      { transform: 'translate(-50%, -50%) scale(1)', opacity: 1 },
+      { transform: 'translate(-50%, -50%) scale(0)', opacity: 0 }
+    ], {
+      duration: 500,
+      easing: 'ease-in'
     });
-
-  } catch (error) {
-    logError('Error triggering power-up animation:', error);
-  }
+    
+    exitAnimation.addEventListener('finish', () => {
+      popup.remove();
+      activeAnimations.delete(exitAnimation);
+    });
+  }, ANIMATION_CONFIG.achievement.duration);
+  
+  entranceAnimation.addEventListener('finish', () => {
+    activeAnimations.delete(entranceAnimation);
+  });
 }
 
 /**
- * Animate element entrance
+ * Create floating points animation
  */
-export function animateElementIn(element, animation = 'fade-in', delay = 0) {
-  if (!element || !isInitialized) return;
-
-  try {
-    setTimeout(() => {
-      element.classList.add(`animate-${animation}`);
-      
-      setTimeout(() => {
-        element.classList.remove(`animate-${animation}`);
-      }, 300);
-    }, delay);
-
-  } catch (error) {
-    logError('Error animating element in:', error);
+function triggerFloatingPoints(points, sourceElement) {
+  if (!sourceElement) return;
+  
+  const rect = sourceElement.getBoundingClientRect();
+  const container = document.getElementById('floating-points');
+  if (!container) return;
+  
+  const floatingPoint = document.createElement('div');
+  floatingPoint.className = 'floating-point-animation';
+  floatingPoint.textContent = `+${points}`;
+  
+  // Position at source element
+  floatingPoint.style.left = `${rect.left + rect.width / 2}px`;
+  floatingPoint.style.top = `${rect.top + rect.height / 2}px`;
+  
+  container.appendChild(floatingPoint);
+  
+  if (isReducedMotion) {
+    // Simple fade for reduced motion
+    floatingPoint.style.opacity = '0';
+    setTimeout(() => floatingPoint.remove(), 1000);
+    return;
   }
-}
-
-/**
- * Animate number change
- */
-export function animateNumberChange(element, fromValue, toValue, duration = 500) {
-  if (!element || !isInitialized) return;
-
-  const startTime = performance.now();
-  const difference = toValue - fromValue;
-
-  function updateNumber(currentTime) {
-    const elapsed = currentTime - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    
-    // Easing function
-    const easedProgress = 1 - Math.pow(1 - progress, 3);
-    const currentValue = Math.round(fromValue + difference * easedProgress);
-    
-    element.textContent = currentValue.toLocaleString();
-    
-    if (progress < 1) {
-      requestAnimationFrame(updateNumber);
+  
+  // Animate floating up and fading out
+  const floatingAnimation = floatingPoint.animate([
+    { 
+      transform: 'translate(-50%, -50%) scale(1)', 
+      opacity: 1,
+      filter: 'blur(0px)'
+    },
+    { 
+      transform: `translate(-50%, -${ANIMATION_CONFIG.floatingPoints.distance}px) scale(1.2)`, 
+      opacity: ANIMATION_CONFIG.floatingPoints.fadeStart,
+      filter: 'blur(0px)'
+    },
+    { 
+      transform: `translate(-50%, -${ANIMATION_CONFIG.floatingPoints.distance * 1.5}px) scale(0.8)`, 
+      opacity: 0,
+      filter: 'blur(3px)'
     }
-  }
-
-  requestAnimationFrame(updateNumber);
+  ], {
+    duration: ANIMATION_CONFIG.floatingPoints.duration,
+    easing: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)'
+  });
+  
+  activeAnimations.add(floatingAnimation);
+  
+  floatingAnimation.addEventListener('finish', () => {
+    floatingPoint.remove();
+    activeAnimations.delete(floatingAnimation);
+  });
 }
 
 /**
- * Create floating text animation
+ * Create ripple effect on button
  */
-export function showFloatingText(text, x, y, options = {}) {
-  if (!isInitialized || ANIMATION_CONFIG.reducedMotion) return;
+function createRippleEffect(button) {
+  if (isReducedMotion) return;
+  
+  const ripple = document.createElement('div');
+  ripple.className = 'ripple-effect';
+  
+  const rect = button.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height) * 2;
+  
+  ripple.style.width = ripple.style.height = `${size}px`;
+  ripple.style.left = `${rect.width / 2 - size / 2}px`;
+  ripple.style.top = `${rect.height / 2 - size / 2}px`;
+  
+  button.appendChild(ripple);
+  
+  const rippleAnimation = ripple.animate([
+    { transform: 'scale(0)', opacity: 1 },
+    { transform: 'scale(1)', opacity: 0 }
+  ], {
+    duration: 600,
+    easing: 'ease-out'
+  });
+  
+  activeAnimations.add(rippleAnimation);
+  
+  rippleAnimation.addEventListener('finish', () => {
+    ripple.remove();
+    activeAnimations.delete(rippleAnimation);
+  });
+}
 
-  try {
-    const floatingElement = document.createElement('div');
-    floatingElement.textContent = text;
-    floatingElement.style.cssText = `
-      position: fixed;
-      left: ${x}px;
-      top: ${y}px;
-      color: ${options.color || '#00ff88'};
-      font-size: ${options.fontSize || '24px'};
-      font-weight: bold;
-      pointer-events: none;
-      z-index: 2000;
-      transform: translate(-50%, -50%);
-      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-    `;
+/**
+ * Create combo particles
+ */
+function createComboParticles(comboElement, combo) {
+  if (isReducedMotion) return;
+  
+  const rect = comboElement.getBoundingClientRect();
+  const particleCount = Math.min(combo, 20); // Cap particles for performance
+  
+  for (let i = 0; i < particleCount; i++) {
+    const particle = document.createElement('div');
+    particle.className = 'combo-particle';
     
-    document.body.appendChild(floatingElement);
+    const angle = (Math.PI * 2 * i) / particleCount;
+    const velocity = 50 + Math.random() * 100;
+    const endX = Math.cos(angle) * velocity;
+    const endY = Math.sin(angle) * velocity;
     
-    // Animate the floating text
-    const animation = floatingElement.animate([
+    particle.style.left = `${rect.left + rect.width / 2}px`;
+    particle.style.top = `${rect.top + rect.height / 2}px`;
+    particle.style.background = ANIMATION_CONFIG.powerUp.colors[i % ANIMATION_CONFIG.powerUp.colors.length];
+    
+    document.body.appendChild(particle);
+    
+    const particleAnimation = particle.animate([
       { 
-        transform: 'translate(-50%, -50%) scale(0.5)', 
-        opacity: 0 
+        transform: 'translate(-50%, -50%) scale(0)', 
+        opacity: 1 
       },
       { 
-        transform: 'translate(-50%, -100%) scale(1.2)', 
-        opacity: 1,
-        offset: 0.3
+        transform: 'translate(-50%, -50%) scale(1)', 
+        opacity: 1 
       },
       { 
-        transform: 'translate(-50%, -150%) scale(1)', 
+        transform: `translate(${endX}px, ${endY}px) scale(0)`, 
         opacity: 0 
       }
     ], {
-      duration: options.duration || 1500,
+      duration: 1000 + Math.random() * 500,
       easing: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)'
     });
     
-    animation.onfinish = () => {
-      if (floatingElement.parentNode) {
-        floatingElement.parentNode.removeChild(floatingElement);
-      }
-    };
-
-  } catch (error) {
-    logError('Error showing floating text:', error);
-  }
-}
-
-/**
- * Screen shake effect
- */
-export function screenShake(intensity = 5, duration = 300) {
-  if (!isInitialized || ANIMATION_CONFIG.reducedMotion) return;
-
-  try {
-    const appElement = document.getElementById('app');
-    if (!appElement) return;
-
-    const originalTransform = appElement.style.transform;
-    let startTime = performance.now();
-
-    function shake(currentTime) {
-      const elapsed = currentTime - startTime;
-      const progress = elapsed / duration;
-      
-      if (progress >= 1) {
-        appElement.style.transform = originalTransform;
-        return;
-      }
-      
-      const currentIntensity = intensity * (1 - progress);
-      const offsetX = (Math.random() - 0.5) * currentIntensity;
-      const offsetY = (Math.random() - 0.5) * currentIntensity;
-      
-      appElement.style.transform = `${originalTransform} translate(${offsetX}px, ${offsetY}px)`;
-      
-      requestAnimationFrame(shake);
-    }
-
-    requestAnimationFrame(shake);
-
-  } catch (error) {
-    logError('Error triggering screen shake:', error);
-  }
-}
-
-/**
- * Pulse effect for elements
- */
-export function pulseElement(element, options = {}) {
-  if (!element || !isInitialized || ANIMATION_CONFIG.reducedMotion) return;
-
-  try {
-    const animation = element.animate([
-      { transform: 'scale(1)', opacity: 1 },
-      { transform: `scale(${options.scale || 1.1})`, opacity: options.opacity || 0.8 },
-      { transform: 'scale(1)', opacity: 1 }
-    ], {
-      duration: options.duration || 400,
-      easing: ANIMATION_CONFIG.easing.easeInOut,
-      iterations: options.iterations || 1
+    activeAnimations.add(particleAnimation);
+    
+    particleAnimation.addEventListener('finish', () => {
+      particle.remove();
+      activeAnimations.delete(particleAnimation);
     });
-
-    return animation;
-
-  } catch (error) {
-    logError('Error pulsing element:', error);
-    return null;
   }
 }
 
 /**
- * Check if animations are enabled
+ * Create power-up particles
  */
-export function areAnimationsEnabled() {
-  return isInitialized && !ANIMATION_CONFIG.reducedMotion;
+function createPowerUpParticles(element, powerUpId) {
+  if (isReducedMotion) return;
+  
+  const rect = element.getBoundingClientRect();
+  const colors = ANIMATION_CONFIG.powerUp.colors;
+  
+  for (let i = 0; i < ANIMATION_CONFIG.powerUp.particles; i++) {
+    const particle = document.createElement('div');
+    particle.className = 'powerup-particle';
+    
+    const angle = (Math.PI * 2 * i) / ANIMATION_CONFIG.powerUp.particles;
+    const distance = 80 + Math.random() * 40;
+    const endX = rect.left + rect.width / 2 + Math.cos(angle) * distance;
+    const endY = rect.top + rect.height / 2 + Math.sin(angle) * distance;
+    
+    particle.style.left = `${rect.left + rect.width / 2}px`;
+    particle.style.top = `${rect.top + rect.height / 2}px`;
+    particle.style.background = colors[Math.floor(Math.random() * colors.length)];
+    
+    document.body.appendChild(particle);
+    
+    const particleAnimation = particle.animate([
+      { 
+        transform: 'translate(-50%, -50%) scale(1) rotate(0deg)', 
+        opacity: 1 
+      },
+      { 
+        transform: `translate(${endX - rect.left - rect.width / 2}px, ${endY - rect.top - rect.height / 2}px) scale(0.5) rotate(360deg)`, 
+        opacity: 0 
+      }
+    ], {
+      duration: ANIMATION_CONFIG.powerUp.duration + Math.random() * 400,
+      easing: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)'
+    });
+    
+    activeAnimations.add(particleAnimation);
+    
+    particleAnimation.addEventListener('finish', () => {
+      particle.remove();
+      activeAnimations.delete(particleAnimation);
+    });
+  }
 }
 
 /**
- * Get animation duration based on user preferences
+ * Trigger screen shake effect
  */
-export function getAnimationDuration(type = 'normal') {
-  if (ANIMATION_CONFIG.reducedMotion) return 10; // Nearly instant
+function triggerScreenShake(intensity = 10, duration = 300) {
+  if (isReducedMotion) return;
   
-  const durations = {
-    fast: 150,
-    normal: 300,
-    slow: 600
+  const appContainer = document.querySelector('.app-container');
+  if (!appContainer) return;
+  
+  const shakeAnimation = appContainer.animate([
+    { transform: 'translate(0, 0)' },
+    { transform: `translate(${intensity}px, ${intensity}px)` },
+    { transform: `translate(-${intensity}px, -${intensity}px)` },
+    { transform: `translate(${intensity}px, -${intensity}px)` },
+    { transform: `translate(-${intensity}px, ${intensity}px)` },
+    { transform: 'translate(0, 0)' }
+  ], {
+    duration: duration,
+    easing: 'linear'
+  });
+  
+  activeAnimations.add(shakeAnimation);
+  
+  shakeAnimation.addEventListener('finish', () => {
+    activeAnimations.delete(shakeAnimation);
+  });
+}
+
+/**
+ * Create achievement popup
+ */
+function createAchievementPopup(achievementId) {
+  const popup = document.createElement('div');
+  popup.className = 'achievement-popup';
+  popup.innerHTML = `
+    <div class="achievement-content">
+      <div class="achievement-icon">🏆</div>
+      <div class="achievement-text">
+        <h3>Achievement Unlocked!</h3>
+        <p>${getAchievementTitle(achievementId)}</p>
+      </div>
+    </div>
+  `;
+  
+  popup.style.position = 'fixed';
+  popup.style.top = '50%';
+  popup.style.left = '50%';
+  popup.style.transform = 'translate(-50%, -50%)';
+  popup.style.zIndex = '10000';
+  
+  return popup;
+}
+
+/**
+ * Get achievement title by ID
+ */
+function getAchievementTitle(achievementId) {
+  const achievements = {
+    score_100: 'First 100 Points',
+    score_500: 'Getting Started',
+    score_1000: '1K Milestone',
+    score_5000: 'Slap Master',
+    score_10000: 'Elite Slapper',
+    score_50000: 'Legendary',
+    score_100000: 'Ultimate Champion',
+    combo_10: '10x Combo Master',
+    combo_25: '25x Combo Beast'
   };
   
-  return durations[type] || durations.normal;
+  return achievements[achievementId] || 'Special Achievement';
+}
+
+/**
+ * Create particle system container
+ */
+function createParticleContainer() {
+  let container = document.getElementById('particle-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'particle-container';
+    container.className = 'particle-container';
+    container.style.position = 'fixed';
+    container.style.top = '0';
+    container.style.left = '0';
+    container.style.width = '100%';
+    container.style.height = '100%';
+    container.style.pointerEvents = 'none';
+    container.style.zIndex = '1000';
+    document.body.appendChild(container);
+  }
+}
+
+/**
+ * Set up CSS custom properties for animations
+ */
+function setupAnimationVariables() {
+  const root = document.documentElement;
+  
+  // Dynamic animation durations based on device performance
+  const performanceLevel = getPerformanceLevel();
+  const durationMultiplier = performanceLevel === 'high' ? 1 : performanceLevel === 'medium' ? 1.2 : 1.5;
+  
+  root.style.setProperty('--animation-duration-fast', `${100 * durationMultiplier}ms`);
+  root.style.setProperty('--animation-duration-normal', `${300 * durationMultiplier}ms`);
+  root.style.setProperty('--animation-duration-slow', `${600 * durationMultiplier}ms`);
+  
+  // Reduced motion overrides
+  if (isReducedMotion) {
+    root.style.setProperty('--animation-duration-fast', '50ms');
+    root.style.setProperty('--animation-duration-normal', '100ms');
+    root.style.setProperty('--animation-duration-slow', '200ms');
+  }
+}
+
+/**
+ * Detect device performance level
+ */
+function getPerformanceLevel() {
+  // Simple performance detection based on device capabilities
+  if (navigator.deviceMemory && navigator.deviceMemory >= 8) return 'high';
+  if (navigator.hardwareConcurrency && navigator.hardwareConcurrency >= 4) return 'medium';
+  return 'low';
+}
+
+/**
+ * Queue animation for batch processing
+ */
+export function queueAnimation(animationFn, priority = 'normal') {
+  animationQueue.push({ fn: animationFn, priority });
+  
+  if (animationQueue.length === 1) {
+    processAnimationQueue();
+  }
+}
+
+/**
+ * Process animation queue
+ */
+function processAnimationQueue() {
+  if (animationQueue.length === 0) return;
+  
+  // Sort by priority
+  animationQueue.sort((a, b) => {
+    const priorityOrder = { high: 3, normal: 2, low: 1 };
+    return (priorityOrder[b.priority] || 2) - (priorityOrder[a.priority] || 2);
+  });
+  
+  const animation = animationQueue.shift();
+  
+  requestAnimationFrame(() => {
+    animation.fn();
+    
+    // Process next animation
+    if (animationQueue.length > 0) {
+      setTimeout(processAnimationQueue, 16); // ~60fps
+    }
+  });
 }
 
 /**
  * Cleanup animations
  */
 export function cleanup() {
-  try {
-    // Stop all active animations
-    activeAnimations.forEach(animation => {
-      if (animation && animation.cancel) {
-        animation.cancel();
-      }
-    });
-    activeAnimations.clear();
-
-    // Cleanup particle system
-    if (particleSystem) {
-      particleSystem.destroy();
-      particleSystem = null;
-    }
-
-    // Cancel animation frame
-    if (animationFrameId) {
-      cancelAnimationFrame(animationFrameId);
-      animationFrameId = null;
-    }
-
-    isInitialized = false;
-    logDev('Animation system cleaned up');
-
-  } catch (error) {
-    logError('Error cleaning up animations:', error);
-  }
+  // Cancel all active animations
+  activeAnimations.forEach(animation => {
+    if (animation.cancel) animation.cancel();
+  });
+  activeAnimations.clear();
+  
+  // Clear animation queue
+  animationQueue = [];
+  
+  // Remove particle containers
+  const containers = document.querySelectorAll('.particle-container, #floating-points, #particle-container');
+  containers.forEach(container => container.remove());
 }
 
-// Handle reduced motion preference changes
-if (typeof window !== 'undefined') {
-  const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-  mediaQuery.addEventListener('change', (e) => {
-    ANIMATION_CONFIG.reducedMotion = e.matches;
-    logDev('Reduced motion preference changed:', e.matches);
-    
-    if (e.matches && particleSystem) {
-      particleSystem.clear();
-    }
-  });
+// Export for debugging
+if (window.location.hostname === 'localhost') {
+  window.animationDebug = {
+    activeAnimations: activeAnimations.size,
+    queueLength: () => animationQueue.length,
+    isReducedMotion,
+    cleanup
+  };
 }

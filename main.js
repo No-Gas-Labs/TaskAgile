@@ -1,163 +1,182 @@
+
 /**
  * No_Gas_Slaps™ - Main Application Entry Point
  * Production-ready Telegram Mini App for tap-to-earn gaming
  * 
  * @author No_Gas_Slaps™ Development Team
- * @version 1.0.0
+ * @version 2.0.0
  * @license MIT
  */
 
 // Import all game modules
-import { initTelegram, getTheme, onThemeChanged, getUser, onReady, onClose, isInsideTelegram } from './modules/telegram-api.js';
-import { initUI, updateUI, announce, focusSlapButton, showOnboarding, hideOnboarding, showHelp } from './modules/ui.js';
-import { initState, getState, onStateChange, slap, initPowerUps, claimDailyReward, onPowerUpChange, activatePowerUp } from './modules/state.js';
-import { syncLeaderboard, getLeaderboard, onLeaderboardChange, updateLeaderboard, refreshLeaderboard } from './modules/leaderboard-api.js';
-import { showError, clearError, showSuccess, onErrorChange } from './modules/error.js';
-import { verifyInitData, sanitizeInput } from './modules/security.js';
-import { initPersistence, onSyncQueueChange } from './modules/persistence.js';
-import { runUnitTests, logDev, logError, logInfo } from './modules/testing.js';
-import { initAudio, playHitSound, playSuccessSound, playComboSound, toggleMute } from './modules/audio.js';
-import { initAnimations, triggerSlapAnimation, triggerComboAnimation, triggerPowerUpAnimation } from './modules/animations.js';
-import { loadLocalization, t } from './localization/en.js';
+import { initTelegram, getTheme, onThemeChanged, getUser, onReady, onClose, isInsideTelegram, shareScore, hapticFeedback } from './modules/telegram-api.js';
+import { initUI, updateUI, announce, focusSlapButton, showOnboarding, hideOnboarding, showHelp, hideLoadingScreen, showToast, updateTheme } from './modules/ui.js';
+import { initState, getState, onStateChange, slap, initPowerUps, claimDailyReward, onPowerUpChange, activatePowerUp, getPowerUpsState } from './modules/state.js';
+import { initLeaderboard, syncLeaderboard, getLeaderboard, onLeaderboardChange, updateLeaderboard, refreshLeaderboard, getPlayerStats } from './modules/leaderboard-api.js';
+import { showError, clearError, showSuccess, onErrorChange, getError, getCurrentSuccess } from './modules/error.js';
+import { verifyInitData, sanitizeInput, validateInput } from './modules/security.js';
+import { initPersistence, onSyncQueueChange, getOnlineStatus, enqueueSync } from './modules/persistence.js';
+import { runUnitTests, logDev, logError, logInfo, setLogLevel } from './modules/testing.js';
+import { initAudio, playHitSound, playSuccessSound, playComboSound, toggleMute, playPowerUpSound, playAchievementSound, startBackgroundMusic, playNotificationSound } from './modules/audio.js';
+import { initAnimations, triggerSlapAnimation, triggerComboAnimation, triggerPowerUpAnimation, triggerAchievementAnimation, queueAnimation } from './modules/animations.js';
+import { loadLocalization, t, formatNumber, formatTime } from './localization/en.js';
 
 /**
  * Application configuration
  */
 const APP_CONFIG = {
-  version: '1.0.0',
-  environment: 'production',
-  debug: false,
+  version: '2.0.0',
+  debug: window.location.hostname === 'localhost',
   features: {
-    audio: true,
     animations: true,
+    audio: true,
     hapticFeedback: true,
-    pwa: true,
-    accessibility: true
+    analytics: true,
+    autoSave: true,
+    backgroundMusic: false,
+    particleEffects: true
+  },
+  performance: {
+    maxFPS: 60,
+    animationBudget: 16, // ms per frame
+    particleLimit: 50,
+    soundLimit: 8
+  },
+  game: {
+    maxCombo: 100,
+    comboTimeout: 1200,
+    autoSaveInterval: 30000,
+    leaderboardRefreshInterval: 300000 // 5 minutes
   }
 };
 
-/**
- * Application state management
- */
+// Application state
 let appInitialized = false;
-let loadingTimeout = null;
+let gameLoopId = null;
+let lastFrameTime = 0;
+let performanceMetrics = {
+  fps: 0,
+  frameTime: 0,
+  loadTime: 0
+};
 
 /**
- * Initialize the application
+ * Main application initialization
  */
-async function initializeApp() {
+async function initApp() {
+  const startTime = performance.now();
+  
   try {
-    logInfo('🚀 Initializing No_Gas_Slaps™ Application');
+    logInfo('🚀 Initializing No_Gas_Slaps™', APP_CONFIG.version);
     
-    // Set loading timeout to prevent indefinite loading
-    loadingTimeout = setTimeout(() => {
+    // Set up loading timeout
+    const loadingTimeout = setTimeout(() => {
+      logError('App initialization timeout');
       hideLoadingScreen();
-      showError(t('errors.loadingTimeout'));
-    }, 15000);
-
-    // Load localization first
-    await loadLocalization();
-    logInfo('✅ Localization loaded');
-
-    // Initialize Telegram SDK
-    await initTelegram();
-    logInfo('✅ Telegram SDK initialized');
-
-    // Verify init data for security
+      showError(t('errors.initializationFailed', { error: 'Timeout' }));
+    }, 30000);
+    
+    // Set log level based on environment
+    setLogLevel(APP_CONFIG.debug ? 'dev' : 'info');
+    
+    // Initialize localization first
+    await loadLocalization('en');
+    logDev('✅ Localization initialized');
+    
+    // Initialize security and validation
     if (isInsideTelegram()) {
-      verifyInitData();
-      logInfo('✅ Telegram init data verified');
-    } else {
-      logInfo('⚠️ Running outside Telegram - some features may be limited');
+      try {
+        const initData = window.Telegram?.WebApp?.initData;
+        if (initData) {
+          await verifyInitData(initData);
+          logDev('✅ Telegram init data verified');
+        }
+      } catch (error) {
+        logError('Telegram init data verification failed:', error);
+        // Continue anyway for development
+      }
     }
-
-    // Apply theme from Telegram
-    const theme = getTheme();
-    document.body.setAttribute('data-theme', theme);
-    logInfo(`✅ Theme applied: ${theme}`);
-
-    // Listen for theme changes
-    onThemeChanged(newTheme => {
-      document.body.setAttribute('data-theme', newTheme);
-      logInfo(`🎨 Theme changed to: ${newTheme}`);
-      announce(t('announcements.themeChanged', { theme: newTheme }));
-    });
-
-    // Initialize persistence layer
-    await initPersistence();
-    logInfo('✅ Persistence initialized');
-
-    // Initialize audio system
-    if (APP_CONFIG.features.audio) {
-      await initAudio();
-      logInfo('✅ Audio system initialized');
-    }
-
-    // Initialize animations
-    if (APP_CONFIG.features.animations) {
-      initAnimations();
-      logInfo('✅ Animation system initialized');
-    }
-
-    // Initialize game state
+    
+    // Initialize core systems
+    await Promise.all([
+      initPersistence(),
+      initAudio(),
+      initAnimations()
+    ]);
+    
+    // Initialize Telegram integration
+    await initTelegram();
+    logDev('✅ Telegram integration initialized');
+    
+    // Initialize game systems
     await initState();
-    logInfo('✅ Game state initialized');
-
-    // Initialize power-ups
     await initPowerUps();
-    logInfo('✅ Power-ups initialized');
-
-    // Initialize UI components
-    initUI({
+    await initLeaderboard();
+    logDev('✅ Game systems initialized');
+    
+    // Initialize UI with event handlers
+    await initUI({
       onSlap: handleSlap,
-      onClaimDaily: handleClaimDaily,
-      onActivatePowerUp: handleActivatePowerUp,
-      onRefreshLeaderboard: handleRefreshLeaderboard,
-      onShowHelp: () => showHelp(),
-      onToggleMute: toggleMute,
-      onShare: handleShare
+      onPowerUpActivate: handlePowerUpActivate,
+      onDailyRewardClaim: handleDailyRewardClaim,
+      onSoundToggle: handleSoundToggle,
+      onShare: handleShare,
+      onRefreshLeaderboard: handleRefreshLeaderboard
     });
-    logInfo('✅ UI initialized');
-
-    // Set up reactive updates
-    onStateChange(handleStateChange);
-    onPowerUpChange(updateUI);
-    onLeaderboardChange(updateUI);
-    onErrorChange(updateUI);
-
-    // Initialize leaderboard sync
-    onSyncQueueChange(syncLeaderboard);
-
-    // Run development tests
-    if (APP_CONFIG.debug || window.location.hostname === 'localhost') {
-      runUnitTests();
-      logInfo('✅ Unit tests executed');
-    }
-
+    
+    // Set up event listeners
+    setupEventListeners();
+    
+    // Set up periodic tasks
+    setupPeriodicTasks();
+    
+    // Set up theme
+    const theme = getTheme();
+    updateTheme(theme);
+    
     // Check for first-time user
-    const hasSeenOnboarding = localStorage.getItem('ngs_onboarded');
-    if (!hasSeenOnboarding) {
-      showOnboardingFlow();
+    const user = getUser();
+    const state = getState();
+    
+    if (!state || state.totalSlaps === 0) {
+      // First time user - show onboarding
+      setTimeout(() => showOnboarding(), 1000);
+      logInfo('👋 New user detected - showing onboarding');
     } else {
-      // Focus slap button for immediate interaction
-      setTimeout(focusSlapButton, 500);
+      // Returning user
+      announce(t('messages.welcome'));
+      logInfo('🎮 Returning user - welcome back!');
     }
-
+    
+    // Start background music if enabled and not muted
+    if (APP_CONFIG.features.backgroundMusic) {
+      setTimeout(() => startBackgroundMusic(), 2000);
+    }
+    
+    // Start game loop
+    startGameLoop();
+    
+    // Run tests in development
+    if (APP_CONFIG.debug) {
+      setTimeout(() => runUnitTests(), 5000);
+    }
+    
     // Initialize PWA features
-    if (APP_CONFIG.features.pwa) {
+    if ('serviceWorker' in navigator) {
       initializePWA();
     }
 
     // Set up Telegram lifecycle hooks
     onReady(() => {
-      announce(t('announcements.gameReady'));
+      announce(t('game.ready'));
       logInfo('📱 Telegram ready event received');
     });
 
     onClose(() => {
-      announce(t('announcements.appClosed'));
+      announce(t('messages.shareScore', { score: getState().score }));
       logInfo('👋 App closing');
-      saveGameState();
+      saveGameProgress();
+      cleanup();
     });
 
     // Hide loading screen
@@ -165,11 +184,18 @@ async function initializeApp() {
     hideLoadingScreen();
     
     appInitialized = true;
-    logInfo('🎉 Application fully initialized');
+    
+    // Calculate and log performance metrics
+    performanceMetrics.loadTime = performance.now() - startTime;
+    logInfo(`🎉 Application fully initialized in ${performanceMetrics.loadTime.toFixed(2)}ms`);
+
+    // Show success notification
+    setTimeout(() => {
+      showToast(t('success.connected'), 'success');
+    }, 1000);
 
   } catch (error) {
     logError('💥 Application initialization failed:', error);
-    clearTimeout(loadingTimeout);
     hideLoadingScreen();
     showError(t('errors.initializationFailed', { error: error.message }));
     
@@ -186,12 +212,14 @@ async function handleSlap() {
     if (!appInitialized) return;
 
     const prevState = getState();
-    await slap();
+    const points = await slap();
     const newState = getState();
+
+    if (!points) return; // Anti-cheat blocked
 
     // Visual feedback
     if (APP_CONFIG.features.animations) {
-      triggerSlapAnimation();
+      queueAnimation(() => triggerSlapAnimation(points), 'high');
     }
 
     // Audio feedback
@@ -201,86 +229,165 @@ async function handleSlap() {
       // Special audio for combos
       if (newState.combo > prevState.combo && newState.combo > 1) {
         playComboSound(newState.combo);
+        
+        if (APP_CONFIG.features.animations) {
+          queueAnimation(() => triggerComboAnimation(newState.combo), 'high');
+        }
+      }
+      
+      // Achievement sound
+      if (newState.achievements.length > prevState.achievements.length) {
+        playAchievementSound();
+        
+        if (APP_CONFIG.features.animations) {
+          const newAchievement = newState.achievements[newState.achievements.length - 1];
+          queueAnimation(() => triggerAchievementAnimation(newAchievement), 'high');
+        }
       }
     }
 
     // Haptic feedback
-    if (APP_CONFIG.features.hapticFeedback && navigator.vibrate) {
-      navigator.vibrate([10, 5, 15]);
-    }
-
-    // Update leaderboard if score changed significantly
-    if (newState.score > prevState.score) {
-      updateLeaderboard(newState.score);
-    }
-
-    // Announce score milestone
-    if (newState.score % 1000 === 0 && newState.score > 0) {
-      announce(t('announcements.scoreMilestone', { score: newState.score }));
-      if (APP_CONFIG.features.audio) {
-        playSuccessSound();
+    if (APP_CONFIG.features.hapticFeedback) {
+      if (isInsideTelegram()) {
+        let intensity = 'light';
+        if (newState.combo > 10) intensity = 'medium';
+        if (newState.combo > 25) intensity = 'heavy';
+        
+        hapticFeedback('impact', intensity);
+      } else if (navigator.vibrate) {
+        const duration = Math.min(50 + newState.combo * 2, 200);
+        navigator.vibrate(duration);
       }
     }
 
-  } catch (error) {
-    logError('Error handling slap:', error);
-    showError(error.message || t('errors.slapFailed'));
-  }
-}
-
-/**
- * Handle daily reward claim
- */
-async function handleClaimDaily() {
-  try {
-    const prevState = getState();
-    await claimDailyReward();
-    const newState = getState();
-
-    // Success feedback
-    if (APP_CONFIG.features.audio) {
-      playSuccessSound();
-    }
-
-    showSuccess(t('success.dailyRewardClaimed', { 
-      amount: newState.score - prevState.score 
-    }));
-
     // Update leaderboard
     updateLeaderboard(newState.score);
-
-    // Announce achievement
-    announce(t('announcements.dailyRewardClaimed'));
+    
+    // Check for notifications
+    checkForNotifications(prevState, newState);
 
   } catch (error) {
-    logError('Error claiming daily reward:', error);
-    showError(error.message || t('errors.claimFailed'));
+    logError('Error handling slap:', error);
+    showError(error.message || t('errors.general'));
   }
 }
 
 /**
  * Handle power-up activation
  */
-async function handleActivatePowerUp(powerUpId) {
+async function handlePowerUpActivate(powerUpId) {
   try {
+    const powerUpElement = document.querySelector(`[data-powerup="${powerUpId}"]`);
+    
     await activatePowerUp(powerUpId);
-
-    // Visual feedback
-    if (APP_CONFIG.features.animations) {
-      triggerPowerUpAnimation(powerUpId);
+    
+    // Visual and audio feedback
+    if (APP_CONFIG.features.animations && powerUpElement) {
+      queueAnimation(() => triggerPowerUpAnimation(powerUpId, powerUpElement), 'normal');
     }
+    
+    if (APP_CONFIG.features.audio) {
+      playPowerUpSound();
+    }
+    
+    // Haptic feedback
+    if (APP_CONFIG.features.hapticFeedback && isInsideTelegram()) {
+      hapticFeedback('notification', 'success');
+    }
+    
+    showToast(t('messages.powerUpActivated', { 
+      powerup: t(`powerups.${powerUpId}.name`) 
+    }), 'success');
+    
+    logDev(`Power-up activated: ${powerUpId}`);
 
+  } catch (error) {
+    logError('Error activating power-up:', error);
+    showError(t('errors.powerUpError', { error: error.message }));
+  }
+}
+
+/**
+ * Handle daily reward claim
+ */
+async function handleDailyRewardClaim() {
+  try {
+    const reward = await claimDailyReward();
+    
+    // Visual feedback
+    showToast(t('messages.dailyRewardClaimed', { points: reward }), 'success');
+    
     // Audio feedback
     if (APP_CONFIG.features.audio) {
       playSuccessSound();
     }
-
-    showSuccess(t('success.powerUpActivated', { powerUp: powerUpId }));
-    announce(t('announcements.powerUpActivated', { powerUp: powerUpId }));
+    
+    // Haptic feedback
+    if (APP_CONFIG.features.hapticFeedback && isInsideTelegram()) {
+      hapticFeedback('notification', 'success');
+    }
+    
+    logInfo(`Daily reward claimed: ${reward} points`);
 
   } catch (error) {
-    logError('Error activating power-up:', error);
-    showError(error.message || t('errors.powerUpFailed'));
+    logError('Error claiming daily reward:', error);
+    showError(error.message || t('errors.general'));
+  }
+}
+
+/**
+ * Handle sound toggle
+ */
+function handleSoundToggle() {
+  try {
+    const wasMuted = toggleMute();
+    
+    showToast(
+      wasMuted ? 'Sound muted' : 'Sound enabled', 
+      'info', 
+      1500
+    );
+    
+    // Test sound if unmuted
+    if (!wasMuted && APP_CONFIG.features.audio) {
+      setTimeout(() => playNotificationSound(), 200);
+    }
+    
+    logDev(`Sound ${wasMuted ? 'muted' : 'enabled'}`);
+
+  } catch (error) {
+    logError('Error toggling sound:', error);
+  }
+}
+
+/**
+ * Handle score sharing
+ */
+function handleShare(score) {
+  try {
+    if (isInsideTelegram()) {
+      shareScore(score);
+    } else {
+      // Fallback sharing
+      const shareData = {
+        title: t('social.shareTitle'),
+        text: t('social.shareText', { score: formatNumber(score) }),
+        url: window.location.href
+      };
+      
+      if (navigator.share && navigator.canShare(shareData)) {
+        navigator.share(shareData);
+      } else if (navigator.clipboard) {
+        navigator.clipboard.writeText(`${shareData.text} ${shareData.url}`);
+        showToast('Share text copied to clipboard!', 'success');
+      }
+    }
+    
+    logDev(`Score shared: ${score}`);
+
+  } catch (error) {
+    logError('Error sharing score:', error);
+    showError(t('errors.general'));
   }
 }
 
@@ -289,276 +396,355 @@ async function handleActivatePowerUp(powerUpId) {
  */
 async function handleRefreshLeaderboard() {
   try {
+    const refreshBtn = document.getElementById('refresh-leaderboard');
+    if (refreshBtn) {
+      refreshBtn.disabled = true;
+      refreshBtn.classList.add('spinning');
+    }
+    
     await refreshLeaderboard();
-    announce(t('announcements.leaderboardRefreshed'));
+    
+    showToast('Leaderboard refreshed!', 'success', 2000);
+    
   } catch (error) {
     logError('Error refreshing leaderboard:', error);
-    showError(error.message || t('errors.leaderboardRefreshFailed'));
+    showError(t('errors.leaderboardError'));
+  } finally {
+    const refreshBtn = document.getElementById('refresh-leaderboard');
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.classList.remove('spinning');
+    }
   }
 }
 
 /**
- * Handle state changes
+ * Set up global event listeners
  */
-function handleStateChange(newState) {
-  updateUI();
+function setupEventListeners() {
+  // State change listeners
+  onStateChange((state) => {
+    updateUI();
+    
+    // Auto-save periodically
+    if (state.totalSlaps % 50 === 0) {
+      saveGameProgress();
+    }
+  });
   
-  // Save state periodically
-  if (newState.score % 50 === 0) {
-    saveGameState();
-  }
-
-  // Trigger animations for combo changes
-  if (APP_CONFIG.features.animations && newState.combo > 1) {
-    triggerComboAnimation(newState.combo);
+  onPowerUpChange((powerUps) => {
+    updateUI();
+  });
+  
+  onLeaderboardChange((leaderboard) => {
+    updateUI();
+  });
+  
+  // Theme change listener
+  onThemeChanged((theme) => {
+    updateTheme(theme);
+    logDev(`Theme changed to: ${theme}`);
+  });
+  
+  // Network status listeners
+  window.addEventListener('online', () => {
+    logInfo('🌐 Connection restored');
+    showToast(t('success.connected'), 'success', 2000);
+    
+    // Resume background sync
+    const syncQueue = JSON.parse(localStorage.getItem('ngs_sync_queue_v2') || '[]');
+    if (syncQueue.length > 0) {
+      logInfo(`Resuming sync of ${syncQueue.length} items`);
+    }
+  });
+  
+  window.addEventListener('offline', () => {
+    logInfo('📡 Connection lost - offline mode');
+    showToast(t('errors.offline'), 'info', 3000);
+  });
+  
+  // Page visibility change
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      // Page hidden - save progress
+      saveGameProgress();
+    } else {
+      // Page visible - refresh data
+      if (getOnlineStatus()) {
+        setTimeout(() => refreshLeaderboard().catch(() => {}), 1000);
+      }
+    }
+  });
+  
+  // Error handling
+  window.addEventListener('error', (event) => {
+    logError('Unhandled error:', event.error);
+  });
+  
+  window.addEventListener('unhandledrejection', (event) => {
+    logError('Unhandled promise rejection:', event.reason);
+  });
+  
+  // Performance monitoring
+  if (APP_CONFIG.debug) {
+    setInterval(() => {
+      logDev('Performance metrics:', performanceMetrics);
+    }, 10000);
   }
 }
 
 /**
- * Handle sharing functionality
+ * Set up periodic background tasks
  */
-function handleShare() {
-  try {
-    const state = getState();
-    const user = getUser();
-    const shareText = t('share.message', {
-      score: state.score,
-      name: user?.first_name || 'Player'
-    });
-
-    if (navigator.share) {
-      navigator.share({
-        title: t('share.title'),
-        text: shareText,
-        url: window.location.href
-      });
-    } else {
-      // Fallback to clipboard
-      navigator.clipboard.writeText(shareText).then(() => {
-        showSuccess(t('success.shareTextCopied'));
+function setupPeriodicTasks() {
+  // Auto-save
+  setInterval(() => {
+    if (appInitialized) {
+      saveGameProgress();
+    }
+  }, APP_CONFIG.game.autoSaveInterval);
+  
+  // Leaderboard refresh
+  setInterval(() => {
+    if (appInitialized && getOnlineStatus()) {
+      refreshLeaderboard().catch(error => {
+        logError('Background leaderboard refresh failed:', error);
       });
     }
+  }, APP_CONFIG.game.leaderboardRefreshInterval);
+  
+  // Cleanup old data
+  setInterval(() => {
+    if (appInitialized) {
+      cleanupOldData();
+    }
+  }, 24 * 60 * 60 * 1000); // Daily cleanup
+}
 
-    announce(t('announcements.shareTriggered'));
+/**
+ * Start game loop for performance monitoring
+ */
+function startGameLoop() {
+  let frameCount = 0;
+  let lastFPSUpdate = performance.now();
+  
+  function gameLoop(currentTime) {
+    const deltaTime = currentTime - lastFrameTime;
+    lastFrameTime = currentTime;
+    
+    // Update performance metrics
+    performanceMetrics.frameTime = deltaTime;
+    frameCount++;
+    
+    if (currentTime - lastFPSUpdate >= 1000) {
+      performanceMetrics.fps = Math.round((frameCount * 1000) / (currentTime - lastFPSUpdate));
+      frameCount = 0;
+      lastFPSUpdate = currentTime;
+    }
+    
+    // Continue loop
+    gameLoopId = requestAnimationFrame(gameLoop);
+  }
+  
+  gameLoopId = requestAnimationFrame(gameLoop);
+}
 
-  } catch (error) {
-    logError('Error sharing:', error);
-    showError(t('errors.shareFailed'));
+/**
+ * Stop game loop
+ */
+function stopGameLoop() {
+  if (gameLoopId) {
+    cancelAnimationFrame(gameLoopId);
+    gameLoopId = null;
   }
 }
 
 /**
- * Show onboarding flow for new users
+ * Check for notifications and achievements
  */
-function showOnboardingFlow() {
-  showOnboarding(() => {
-    localStorage.setItem('ngs_onboarded', 'true');
-    hideOnboarding();
+function checkForNotifications(prevState, newState) {
+  // High score notification
+  if (newState.score > (prevState.statistics?.highestScore || 0)) {
+    showToast(t('messages.highScore', { score: formatNumber(newState.score) }), 'success');
+  }
+  
+  // Level up notification
+  const prevLevel = Math.floor(prevState.score / 1000);
+  const newLevel = Math.floor(newState.score / 1000);
+  if (newLevel > prevLevel) {
+    showToast(t('messages.levelUp', { level: newLevel + 1 }), 'success');
     
-    // Welcome message for new users
-    setTimeout(() => {
-      showSuccess(t('success.welcomeMessage'));
-      announce(t('announcements.onboardingComplete'));
-      focusSlapButton();
-    }, 500);
+    if (APP_CONFIG.features.audio) {
+      playSuccessSound();
+    }
+  }
+  
+  // Combo milestone notifications
+  if (newState.combo > prevState.combo) {
+    if (newState.combo === 10 || newState.combo === 25 || newState.combo === 50) {
+      showToast(`🔥 ${newState.combo}x Combo!`, 'success');
+    }
+  }
+  
+  // Power-up unlock notifications
+  const powerUps = getPowerUpsState();
+  Object.entries(powerUps).forEach(([id, powerUp]) => {
+    if (powerUp.unlocked && newState.score >= powerUp.unlockThreshold && 
+        prevState.score < powerUp.unlockThreshold) {
+      showToast(t('messages.powerUpUnlocked', { 
+        powerup: t(`powerups.${id}.name`) 
+      }), 'success');
+    }
   });
+}
+
+/**
+ * Save game progress
+ */
+async function saveGameProgress() {
+  try {
+    // This is handled automatically by the state module
+    // Just enqueue a sync operation if online
+    if (getOnlineStatus()) {
+      const state = getState();
+      enqueueSync({
+        type: 'user_progress',
+        data: {
+          score: state.score,
+          totalSlaps: state.totalSlaps,
+          timestamp: Date.now()
+        },
+        priority: 'normal'
+      });
+    }
+  } catch (error) {
+    logError('Error saving game progress:', error);
+  }
+}
+
+/**
+ * Cleanup old data
+ */
+function cleanupOldData() {
+  try {
+    // Clear old cache entries
+    const keys = Object.keys(localStorage);
+    const now = Date.now();
+    const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+    
+    let cleaned = 0;
+    keys.forEach(key => {
+      if (key.startsWith('ngs_') && key.includes('cache')) {
+        try {
+          const data = JSON.parse(localStorage.getItem(key));
+          if (data && data.timestamp && (now - data.timestamp) > maxAge) {
+            localStorage.removeItem(key);
+            cleaned++;
+          }
+        } catch (e) {
+          // Invalid data, remove it
+          localStorage.removeItem(key);
+          cleaned++;
+        }
+      }
+    });
+    
+    if (cleaned > 0) {
+      logDev(`Cleaned up ${cleaned} old cache entries`);
+    }
+  } catch (error) {
+    logError('Error cleaning up old data:', error);
+  }
 }
 
 /**
  * Initialize PWA features
  */
 function initializePWA() {
-  let deferredPrompt = null;
-
-  // Listen for install prompt
+  // Register service worker for offline support
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').then(registration => {
+      logDev('Service Worker registered:', registration);
+    }).catch(error => {
+      logError('Service Worker registration failed:', error);
+    });
+  }
+  
+  // Handle PWA install prompt
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
-    deferredPrompt = e;
-    showPWAInstallPrompt();
-  });
-
-  // Handle install prompt
-  function showPWAInstallPrompt() {
-    const installEl = document.getElementById('pwa-install');
-    const installBtn = document.getElementById('pwa-install-btn');
-    const dismissBtn = document.getElementById('pwa-dismiss');
-
-    if (installEl && deferredPrompt) {
-      installEl.classList.remove('hidden');
-      installEl.classList.add('show');
-
-      installBtn?.addEventListener('click', async () => {
-        if (deferredPrompt) {
-          deferredPrompt.prompt();
-          const { outcome } = await deferredPrompt.userChoice;
-          
-          if (outcome === 'accepted') {
-            logInfo('PWA install accepted');
-            showSuccess(t('success.pwaInstalled'));
-          }
-          
-          deferredPrompt = null;
-          hidePWAInstallPrompt();
-        }
-      });
-
-      dismissBtn?.addEventListener('click', () => {
-        hidePWAInstallPrompt();
-        localStorage.setItem('ngs_pwa_dismissed', Date.now().toString());
-      });
-    }
-  }
-
-  function hidePWAInstallPrompt() {
-    const installEl = document.getElementById('pwa-install');
-    if (installEl) {
-      installEl.classList.remove('show');
-      installEl.classList.add('hidden');
-    }
-  }
-
-  // Check if already dismissed recently
-  const lastDismissed = localStorage.getItem('ngs_pwa_dismissed');
-  if (lastDismissed) {
-    const dismissedTime = parseInt(lastDismissed);
-    const daysSinceDismissed = (Date.now() - dismissedTime) / (1000 * 60 * 60 * 24);
-    if (daysSinceDismissed < 7) return; // Don't show for a week
-  }
-}
-
-/**
- * Hide loading screen with animation
- */
-function hideLoadingScreen() {
-  const loadingScreen = document.getElementById('loading-screen');
-  if (loadingScreen) {
-    loadingScreen.classList.add('fade-out');
-    setTimeout(() => {
-      loadingScreen.style.display = 'none';
-    }, 400);
-  }
-}
-
-/**
- * Save current game state
- */
-function saveGameState() {
-  try {
-    const state = getState();
-    const saveData = {
-      score: state.score,
-      combo: state.combo,
-      powerUps: state.powerUps,
-      dailyClaimed: state.dailyClaimed,
-      lastSaved: Date.now()
+    
+    // Show custom install prompt
+    const installBtn = document.createElement('button');
+    installBtn.textContent = 'Install App';
+    installBtn.className = 'install-prompt';
+    installBtn.onclick = () => {
+      e.prompt();
+      installBtn.remove();
     };
     
-    localStorage.setItem('ngs_game_state', JSON.stringify(saveData));
-    logDev('Game state saved');
-  } catch (error) {
-    logError('Failed to save game state:', error);
-  }
+    document.body.appendChild(installBtn);
+  });
 }
 
 /**
  * Show fallback error UI
  */
 function showFallbackError(error) {
-  const appEl = document.getElementById('app');
-  if (appEl) {
-    appEl.innerHTML = `
-      <div class="error-container" role="alert">
-        <div class="error-icon">⚠️</div>
-        <h1>No_Gas_Slaps™</h1>
-        <p>Something went wrong while loading the game.</p>
-        <details>
-          <summary>Error Details</summary>
-          <pre>${sanitizeInput(error.message || 'Unknown error')}</pre>
-        </details>
-        <button onclick="window.location.reload()" class="btn btn-primary">
-          Reload Game
-        </button>
-      </div>
-    `;
-  }
+  const fallbackHTML = `
+    <div class="fallback-error">
+      <h1>😅 Oops!</h1>
+      <p>Something went wrong loading the game.</p>
+      <p><small>${error.message}</small></p>
+      <button onclick="window.location.reload()">Try Again</button>
+    </div>
+  `;
+  
+  document.body.innerHTML = fallbackHTML;
 }
 
 /**
- * Handle global errors
+ * Cleanup resources
  */
+function cleanup() {
+  stopGameLoop();
+  saveGameProgress();
+}
+
+// Auto-initialize when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  // DOM is already ready
+  setTimeout(initApp, 0);
+}
+
+// Global error handlers
 window.addEventListener('error', (event) => {
   logError('Global error:', event.error);
-  if (!appInitialized) {
-    showFallbackError(event.error);
+  if (appInitialized) {
+    showError(t('errors.general'));
   }
 });
 
 window.addEventListener('unhandledrejection', (event) => {
   logError('Unhandled promise rejection:', event.reason);
-  if (!appInitialized) {
-    showFallbackError(new Error(event.reason));
+  if (appInitialized) {
+    showError(t('errors.general'));
   }
 });
 
-/**
- * Handle page visibility changes
- */
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    saveGameState();
-    logDev('Page hidden - game state saved');
-  } else {
-    logDev('Page visible - resuming game');
-    if (appInitialized) {
-      updateUI();
-    }
-  }
-});
-
-/**
- * Handle page unload
- */
-window.addEventListener('beforeunload', () => {
-  saveGameState();
-  logInfo('Page unloading - final save completed');
-});
-
-/**
- * Performance monitoring
- */
-if ('PerformanceObserver' in window) {
-  const observer = new PerformanceObserver((list) => {
-    for (const entry of list.getEntries()) {
-      if (entry.entryType === 'measure') {
-        logDev(`Performance: ${entry.name} took ${entry.duration.toFixed(2)}ms`);
-      }
-    }
-  });
-  
-  observer.observe({ entryTypes: ['measure'] });
-}
-
-/**
- * Initialize application when DOM is ready
- */
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initializeApp);
-} else {
-  initializeApp();
-}
-
-/**
- * Export for debugging in development
- */
-if (APP_CONFIG.debug || window.location.hostname === 'localhost') {
+// Export for debugging and testing
+if (APP_CONFIG.debug) {
   window.NoGasSlaps = {
     getState,
-    slap: handleSlap,
-    showError,
-    showSuccess,
-    config: APP_CONFIG,
-    version: APP_CONFIG.version
+    handleSlap,
+    performanceMetrics,
+    appInitialized,
+    APP_CONFIG,
+    cleanup
   };
-  
-  logInfo('🔧 Debug interface attached to window.NoGasSlaps');
 }
+
+// Version info
+console.log(`🚀 No_Gas_Slaps™ v${APP_CONFIG.version} - Production Ready`);

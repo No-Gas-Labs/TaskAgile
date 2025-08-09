@@ -1,3 +1,4 @@
+
 /**
  * UI Module - Handles all user interface interactions and updates
  * Implements WCAG 2.1 AA accessibility standards
@@ -12,12 +13,13 @@ import { t } from '../localization/en.js';
 // UI Element References
 let appEl, slapBtn, scoreEl, comboEl, leaderboardList, powerupsGrid;
 let onboardingOverlay, helpOverlay, errorToast, successToast;
-let gameHeader, dailyRewardSection;
+let gameHeader, dailyRewardSection, progressBar, rankDisplay;
 
 // UI State
 let lastScore = 0;
 let lastCombo = 0;
 let animationTimeouts = new Set();
+let currentTheme = 'light';
 
 // Event Handlers
 let eventHandlers = {};
@@ -57,92 +59,229 @@ export function initUI(handlers) {
  */
 function createMainUI() {
   appEl.innerHTML = `
-    <!-- Game Header -->
-    <header class="game-header" role="banner">
-      <h1 class="game-title" id="game-title">No_Gas_Slaps™</h1>
-      <div class="header-actions">
-        <button class="btn-icon" id="mute-btn" aria-label="${t('ui.toggleMute')}" title="${t('ui.toggleMute')}">
-          🔊
-        </button>
-        <button class="btn-icon" id="help-btn" aria-label="${t('ui.showHelp')}" title="${t('ui.showHelp')}">
-          ❓
-        </button>
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="loading-screen">
+      <div class="loading-logo">
+        <svg width="80" height="80" viewBox="0 0 100 100" class="logo-animation">
+          <circle cx="50" cy="50" r="40" stroke="var(--neon-green)" stroke-width="8" fill="none" 
+                  stroke-linecap="round" stroke-dasharray="251" stroke-dashoffset="251" class="loading-circle"/>
+        </svg>
       </div>
-    </header>
+      <div class="loading-text">Loading No_Gas_Slaps™...</div>
+    </div>
 
-    <!-- Score Display -->
-    <section class="score-container" role="region" aria-labelledby="score-label">
-      <div class="score-label" id="score-label">${t('ui.currentScore')}</div>
-      <div class="score-value" id="score-value" aria-live="polite">0</div>
-    </section>
+    <!-- Main Game Container -->
+    <div class="app-container" style="display: none;">
+      <!-- Game Header -->
+      <header class="game-header">
+        <div class="header-left">
+          <h1 class="game-title">No_Gas_Slaps™</h1>
+          <div class="user-info">
+            <span id="user-name" class="user-name"></span>
+            <span id="user-rank" class="user-rank"></span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button id="help-btn" class="icon-btn" aria-label="Help">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/>
+            </svg>
+          </button>
+          <button id="sound-btn" class="icon-btn" aria-label="Toggle Sound">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+            </svg>
+          </button>
+        </div>
+      </header>
 
-    <!-- Combo Display -->
-    <section class="combo-container" id="combo-container" role="region" aria-labelledby="combo-label" aria-live="polite">
-      <div class="combo-label" id="combo-label" class="sr-only">${t('ui.comboMultiplier')}</div>
-      <div class="combo-multiplier" id="combo-value"></div>
-      <div class="combo-timer">
-        <div class="combo-progress" id="combo-progress"></div>
+      <!-- Score Section -->
+      <section class="score-section">
+        <div class="score-display">
+          <div class="score-value" id="score">0</div>
+          <div class="score-label">Points</div>
+        </div>
+        <div class="combo-display">
+          <div class="combo-value" id="combo">1x</div>
+          <div class="combo-label">Combo</div>
+        </div>
+      </section>
+
+      <!-- Progress Bar -->
+      <div class="progress-container">
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="progress-text">
+          <span id="current-level">Level 1</span>
+          <span id="next-milestone">Next: 100 pts</span>
+        </div>
       </div>
-    </section>
 
-    <!-- Main Slap Button -->
-    <section class="slap-section" role="region" aria-labelledby="slap-label">
-      <div class="slap-label sr-only" id="slap-label">${t('ui.mainAction')}</div>
-      <button class="slap-button" id="slap-btn" 
-              aria-label="${t('ui.slapButton')}" 
-              aria-describedby="slap-description"
-              aria-keyshortcuts="Space Enter">
-        <span class="slap-text">👋 ${t('ui.slapText')}</span>
-      </button>
-      <div class="slap-description sr-only" id="slap-description">
-        ${t('ui.slapDescription')}
-      </div>
-    </section>
-
-    <!-- Daily Reward Section -->
-    <section class="daily-reward hidden" id="daily-reward" role="region" aria-labelledby="daily-title">
-      <h3 class="daily-reward-title" id="daily-title">${t('ui.dailyReward')}</h3>
-      <div class="daily-reward-amount" id="daily-amount">+100 ${t('ui.points')}</div>
-      <button class="daily-reward-button" id="daily-btn" aria-describedby="daily-description">
-        ${t('ui.claimReward')}
-      </button>
-      <div class="daily-description sr-only" id="daily-description">
-        ${t('ui.dailyRewardDescription')}
-      </div>
-    </section>
-
-    <!-- Power-ups Section -->
-    <section class="powerups-container" role="region" aria-labelledby="powerups-title">
-      <h2 class="powerups-title" id="powerups-title">${t('ui.powerUps')}</h2>
-      <div class="powerups-grid" id="powerups-grid" role="group" aria-labelledby="powerups-title">
-        <!-- Power-ups will be dynamically generated -->
-      </div>
-    </section>
-
-    <!-- Leaderboard Section -->
-    <section class="leaderboard-container" role="region" aria-labelledby="leaderboard-title">
-      <div class="leaderboard-header">
-        <h2 class="leaderboard-title" id="leaderboard-title">${t('ui.leaderboard')}</h2>
-        <button class="leaderboard-refresh" id="refresh-btn" 
-                aria-label="${t('ui.refreshLeaderboard')}"
-                title="${t('ui.refreshLeaderboard')}">
-          🔄
+      <!-- Main Slap Button -->
+      <div class="slap-container">
+        <button id="slap-btn" class="slap-button" aria-label="Tap to slap and earn points">
+          <div class="slap-button-inner">
+            <div class="slap-emoji">👋</div>
+            <div class="slap-text">SLAP!</div>
+          </div>
+          <div class="slap-button-glow"></div>
         </button>
       </div>
-      <ol class="leaderboard-list" id="leaderboard-list" 
-          role="list" 
-          aria-labelledby="leaderboard-title"
-          tabindex="0">
-        <!-- Leaderboard items will be dynamically generated -->
-      </ol>
-    </section>
 
-    <!-- Share Section -->
-    <section class="share-section" role="region">
-      <button class="btn btn-secondary" id="share-btn" aria-label="${t('ui.shareScore')}">
-        📤 ${t('ui.shareScore')}
-      </button>
-    </section>
+      <!-- Power-ups Grid -->
+      <section class="powerups-section">
+        <h2 class="section-title">Power-ups</h2>
+        <div id="powerups-grid" class="powerups-grid">
+          <div class="powerup-card locked" data-powerup="doublePoints">
+            <div class="powerup-icon">⚡</div>
+            <div class="powerup-name">Double Points</div>
+            <div class="powerup-description">2x points for 30s</div>
+            <div class="powerup-status">Unlock at 500 pts</div>
+          </div>
+          <div class="powerup-card locked" data-powerup="rapidFire">
+            <div class="powerup-icon">🚀</div>
+            <div class="powerup-name">Rapid Fire</div>
+            <div class="powerup-description">Faster tapping</div>
+            <div class="powerup-status">Unlock at 1000 pts</div>
+          </div>
+          <div class="powerup-card locked" data-powerup="shield">
+            <div class="powerup-icon">🛡️</div>
+            <div class="powerup-name">Combo Shield</div>
+            <div class="powerup-description">Protect combo</div>
+            <div class="powerup-status">Unlock at 2000 pts</div>
+          </div>
+          <div class="powerup-card locked" data-powerup="magnet">
+            <div class="powerup-icon">🧲</div>
+            <div class="powerup-name">Point Magnet</div>
+            <div class="powerup-description">Auto-collect bonuses</div>
+            <div class="powerup-status">Unlock at 5000 pts</div>
+          </div>
+          <div class="powerup-card locked" data-powerup="boost">
+            <div class="powerup-icon">💥</div>
+            <div class="powerup-name">Mega Boost</div>
+            <div class="powerup-description">3x multiplier</div>
+            <div class="powerup-status">Unlock at 10000 pts</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Daily Reward Section -->
+      <section id="daily-reward" class="daily-reward-section">
+        <div class="daily-reward-card">
+          <div class="reward-icon">🎁</div>
+          <div class="reward-content">
+            <h3>Daily Reward</h3>
+            <p>Come back every day for bonus points!</p>
+            <button id="claim-daily" class="claim-btn">Claim 100 pts</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Leaderboard Section -->
+      <section class="leaderboard-section">
+        <div class="section-header">
+          <h2 class="section-title">🏆 Leaderboard</h2>
+          <button id="refresh-leaderboard" class="refresh-btn" aria-label="Refresh leaderboard">
+            <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+            </svg>
+          </button>
+        </div>
+        <div id="leaderboard-list" class="leaderboard-list">
+          <div class="leaderboard-item skeleton">
+            <div class="rank-badge"></div>
+            <div class="player-info">
+              <div class="player-name"></div>
+              <div class="player-score"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Share Button -->
+      <div class="share-section">
+        <button id="share-btn" class="share-button">
+          <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
+          </svg>
+          Share Score
+        </button>
+      </div>
+    </div>
+
+    <!-- Onboarding Overlay -->
+    <div id="onboarding-overlay" class="overlay onboarding-overlay">
+      <div class="overlay-content">
+        <h2>Welcome to No_Gas_Slaps™!</h2>
+        <div class="onboarding-steps">
+          <div class="onboarding-step">
+            <div class="step-icon">👋</div>
+            <h3>Tap to Slap</h3>
+            <p>Tap the slap button to earn points and build combos</p>
+          </div>
+          <div class="onboarding-step">
+            <div class="step-icon">⚡</div>
+            <h3>Unlock Power-ups</h3>
+            <p>Reach milestones to unlock powerful abilities</p>
+          </div>
+          <div class="onboarding-step">
+            <div class="step-icon">🏆</div>
+            <h3>Compete</h3>
+            <p>Climb the leaderboard and share your achievements</p>
+          </div>
+        </div>
+        <button id="start-game" class="primary-btn">Start Slapping!</button>
+      </div>
+    </div>
+
+    <!-- Help Overlay -->
+    <div id="help-overlay" class="overlay help-overlay hidden">
+      <div class="overlay-content">
+        <h2>How to Play</h2>
+        <div class="help-content">
+          <div class="help-section">
+            <h3>🎯 Basic Gameplay</h3>
+            <p>Tap the slap button to earn points. Build combos by tapping quickly!</p>
+          </div>
+          <div class="help-section">
+            <h3>⚡ Power-ups</h3>
+            <p>Unlock special abilities by reaching point milestones. Each power-up has a cooldown period.</p>
+          </div>
+          <div class="help-section">
+            <h3>🏆 Leaderboard</h3>
+            <p>Compete with other players and climb to the top of the rankings!</p>
+          </div>
+          <div class="help-section">
+            <h3>🎁 Daily Rewards</h3>
+            <p>Come back daily to claim bonus points and maintain your streak.</p>
+          </div>
+        </div>
+        <button id="close-help" class="primary-btn">Got It!</button>
+      </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="error-toast" class="toast toast-error hidden" role="alert">
+      <div class="toast-content">
+        <svg class="toast-icon" width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+        </svg>
+        <span class="toast-message"></span>
+      </div>
+    </div>
+
+    <div id="success-toast" class="toast toast-success hidden" role="alert">
+      <div class="toast-content">
+        <svg class="toast-icon" width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+        </svg>
+        <span class="toast-message"></span>
+      </div>
+    </div>
+
+    <!-- Floating Point Animations Container -->
+    <div id="floating-points" class="floating-points"></div>
   `;
 }
 
@@ -150,253 +289,214 @@ function createMainUI() {
  * Cache UI element references for performance
  */
 function cacheUIElements() {
-  // Main elements
+  // Core game elements
   slapBtn = document.getElementById('slap-btn');
-  scoreEl = document.getElementById('score-value');
-  comboEl = document.getElementById('combo-value');
-  leaderboardList = document.getElementById('leaderboard-list');
-  powerupsGrid = document.getElementById('powerups-grid');
+  scoreEl = document.getElementById('score');
+  comboEl = document.getElementById('combo');
+  progressBar = document.getElementById('progress-fill');
   
-  // Overlay elements
+  // Sections
+  powerupsGrid = document.getElementById('powerups-grid');
+  leaderboardList = document.getElementById('leaderboard-list');
+  dailyRewardSection = document.getElementById('daily-reward');
+  
+  // Overlays and modals
   onboardingOverlay = document.getElementById('onboarding-overlay');
   helpOverlay = document.getElementById('help-overlay');
+  
+  // Toast notifications
   errorToast = document.getElementById('error-toast');
   successToast = document.getElementById('success-toast');
   
-  // Other sections
-  gameHeader = document.querySelector('.game-header');
-  dailyRewardSection = document.getElementById('daily-reward');
+  // User info elements
+  rankDisplay = document.getElementById('user-rank');
   
-  // Validate critical elements
-  if (!slapBtn || !scoreEl) {
-    throw new Error('Critical UI elements not found');
-  }
+  console.log('UI elements cached successfully');
 }
 
 /**
- * Set up event listeners
+ * Set up all event listeners
  */
 function setupEventListeners() {
-  // Slap button events
-  slapBtn.addEventListener('click', handleSlapClick);
-  slapBtn.addEventListener('keydown', handleSlapKeydown);
-  
-  // Touch events for mobile
-  slapBtn.addEventListener('touchstart', handleTouchStart, { passive: true });
-  slapBtn.addEventListener('touchend', handleTouchEnd, { passive: true });
-  
-  // Header button events
-  const muteBtn = document.getElementById('mute-btn');
-  const helpBtn = document.getElementById('help-btn');
-  const refreshBtn = document.getElementById('refresh-btn');
-  const shareBtn = document.getElementById('share-btn');
-  const dailyBtn = document.getElementById('daily-btn');
-  
-  muteBtn?.addEventListener('click', () => eventHandlers.onToggleMute?.());
-  helpBtn?.addEventListener('click', () => eventHandlers.onShowHelp?.());
-  refreshBtn?.addEventListener('click', () => eventHandlers.onRefreshLeaderboard?.());
-  shareBtn?.addEventListener('click', () => eventHandlers.onShare?.());
-  dailyBtn?.addEventListener('click', () => eventHandlers.onClaimDaily?.());
-  
-  // Onboarding events
-  const onboardingStart = document.getElementById('onboarding-start');
-  const onboardingSkip = document.getElementById('onboarding-skip');
-  
-  onboardingStart?.addEventListener('click', handleOnboardingComplete);
-  onboardingSkip?.addEventListener('click', handleOnboardingComplete);
-  
-  // Help overlay events
-  const helpClose = document.getElementById('help-close');
-  helpClose?.addEventListener('click', hideHelp);
-  
-  // Toast events
-  const errorClose = errorToast?.querySelector('.toast-close');
-  const successClose = successToast?.querySelector('.toast-close');
-  
-  errorClose?.addEventListener('click', hideErrorToast);
-  successClose?.addEventListener('click', hideSuccessToast);
-  
-  // Global keyboard shortcuts
-  document.addEventListener('keydown', handleGlobalKeydown);
-  
-  // Escape key handling
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      if (!helpOverlay?.classList.contains('hidden')) {
-        hideHelp();
-      } else if (!onboardingOverlay?.classList.contains('hidden')) {
-        hideOnboarding();
+  // Main slap button
+  if (slapBtn) {
+    slapBtn.addEventListener('click', handleSlapClick);
+    slapBtn.addEventListener('touchstart', handleSlapTouchStart, { passive: true });
+    
+    // Add keyboard support
+    slapBtn.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        handleSlapClick();
       }
+    });
+  }
+
+  // Power-up buttons
+  if (powerupsGrid) {
+    powerupsGrid.addEventListener('click', handlePowerUpClick);
+  }
+
+  // Daily reward
+  const claimDailyBtn = document.getElementById('claim-daily');
+  if (claimDailyBtn) {
+    claimDailyBtn.addEventListener('click', handleDailyRewardClaim);
+  }
+
+  // UI controls
+  const helpBtn = document.getElementById('help-btn');
+  if (helpBtn) {
+    helpBtn.addEventListener('click', () => showHelp());
+  }
+
+  const closeHelpBtn = document.getElementById('close-help');
+  if (closeHelpBtn) {
+    closeHelpBtn.addEventListener('click', () => hideHelp());
+  }
+
+  const soundBtn = document.getElementById('sound-btn');
+  if (soundBtn) {
+    soundBtn.addEventListener('click', handleSoundToggle);
+  }
+
+  const shareBtn = document.getElementById('share-btn');
+  if (shareBtn) {
+    shareBtn.addEventListener('click', handleShare);
+  }
+
+  const startGameBtn = document.getElementById('start-game');
+  if (startGameBtn) {
+    startGameBtn.addEventListener('click', () => hideOnboarding());
+  }
+
+  const refreshLeaderboardBtn = document.getElementById('refresh-leaderboard');
+  if (refreshLeaderboardBtn) {
+    refreshLeaderboardBtn.addEventListener('click', handleRefreshLeaderboard);
+  }
+
+  // Close overlays when clicking outside
+  [onboardingOverlay, helpOverlay].forEach(overlay => {
+    if (overlay) {
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          overlay.classList.add('hidden');
+        }
+      });
     }
   });
-  
-  // Focus management
-  document.addEventListener('focusin', handleFocusIn);
-  document.addEventListener('focusout', handleFocusOut);
-}
 
-/**
- * Set up accessibility features
- */
-function setupAccessibility() {
-  // Set up ARIA live regions
-  const scoreEl = document.getElementById('score-value');
-  const comboContainer = document.getElementById('combo-container');
-  
-  if (scoreEl) {
-    scoreEl.setAttribute('aria-live', 'polite');
-    scoreEl.setAttribute('aria-atomic', 'true');
-  }
-  
-  if (comboContainer) {
-    comboContainer.setAttribute('aria-live', 'polite');
-    comboContainer.setAttribute('aria-atomic', 'false');
-  }
-  
-  // Set up keyboard navigation
-  setupKeyboardNavigation();
-  
-  // Set up screen reader announcements
-  setupScreenReaderSupport();
-  
-  // Check for reduced motion preference
-  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  if (prefersReducedMotion.matches) {
-    document.body.classList.add('reduced-motion');
-  }
-}
-
-/**
- * Set up keyboard navigation
- */
-function setupKeyboardNavigation() {
-  const focusableElements = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-  const focusableContent = document.querySelectorAll(focusableElements);
-  
-  // Add skip link functionality
-  const skipLink = document.createElement('a');
-  skipLink.href = '#slap-btn';
-  skipLink.className = 'skip-link sr-only';
-  skipLink.textContent = t('accessibility.skipToMain');
-  skipLink.addEventListener('focus', () => skipLink.classList.remove('sr-only'));
-  skipLink.addEventListener('blur', () => skipLink.classList.add('sr-only'));
-  
-  document.body.insertBefore(skipLink, document.body.firstChild);
-}
-
-/**
- * Set up screen reader support
- */
-function setupScreenReaderSupport() {
-  // Add role and aria-label to main elements
-  const main = document.querySelector('main');
-  if (main) {
-    main.setAttribute('role', 'main');
-    main.setAttribute('aria-label', t('accessibility.mainGameArea'));
-  }
-  
-  // Set up live regions for dynamic content
-  const announcer = document.getElementById('sr-announcer');
-  if (announcer) {
-    announcer.setAttribute('aria-live', 'polite');
-    announcer.setAttribute('aria-atomic', 'true');
-  }
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    switch (e.key) {
+      case ' ':
+        if (e.target === document.body) {
+          e.preventDefault();
+          handleSlapClick();
+        }
+        break;
+      case 'h':
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          showHelp();
+        }
+        break;
+      case 'Escape':
+        hideHelp();
+        hideOnboarding();
+        break;
+    }
+  });
 }
 
 /**
  * Handle slap button click
  */
-async function handleSlapClick(e) {
-  e.preventDefault();
+function handleSlapClick() {
+  if (eventHandlers.onSlap) {
+    eventHandlers.onSlap();
+  }
   
   // Visual feedback
-  slapBtn.classList.add('slap-animation');
-  setTimeout(() => slapBtn.classList.remove('slap-animation'), 600);
+  if (slapBtn) {
+    slapBtn.classList.add('slap-active');
+    setTimeout(() => {
+      slapBtn.classList.remove('slap-active');
+    }, 150);
+  }
+  
+  // Create floating point animation
+  createFloatingPoints('+1');
   
   // Haptic feedback
   if (isInsideTelegram()) {
     hapticFeedback('impact', 'light');
+  } else if (navigator.vibrate) {
+    navigator.vibrate(50);
+  }
+}
+
+/**
+ * Handle touch start for slap button (for better mobile responsiveness)
+ */
+function handleSlapTouchStart() {
+  if (slapBtn) {
+    slapBtn.classList.add('slap-pressed');
+    setTimeout(() => {
+      slapBtn.classList.remove('slap-pressed');
+    }, 100);
+  }
+}
+
+/**
+ * Handle power-up activation
+ */
+function handlePowerUpClick(e) {
+  const powerUpCard = e.target.closest('.powerup-card');
+  if (!powerUpCard || powerUpCard.classList.contains('locked') || powerUpCard.classList.contains('cooldown')) {
+    return;
   }
   
-  // Call slap handler
-  await eventHandlers.onSlap?.();
-}
-
-/**
- * Handle slap button keyboard events
- */
-function handleSlapKeydown(e) {
-  if (e.key === ' ' || e.key === 'Enter') {
-    e.preventDefault();
-    handleSlapClick(e);
+  const powerUpId = powerUpCard.dataset.powerup;
+  if (eventHandlers.onPowerUpActivate && powerUpId) {
+    eventHandlers.onPowerUpActivate(powerUpId);
   }
 }
 
 /**
- * Handle touch start for mobile feedback
+ * Handle daily reward claim
  */
-function handleTouchStart(e) {
-  slapBtn.style.transform = 'scale(0.95)';
-}
-
-/**
- * Handle touch end for mobile feedback
- */
-function handleTouchEnd(e) {
-  slapBtn.style.transform = '';
-}
-
-/**
- * Handle global keyboard shortcuts
- */
-function handleGlobalKeydown(e) {
-  // Space or Enter for slap (when focused on slap button or no other element)
-  if ((e.key === ' ' || e.key === 'Enter') && 
-      (e.target === slapBtn || e.target === document.body)) {
-    e.preventDefault();
-    handleSlapClick(e);
-  }
-  
-  // H for help
-  if (e.key.toLowerCase() === 'h' && !e.ctrlKey && !e.metaKey) {
-    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
-      e.preventDefault();
-      eventHandlers.onShowHelp?.();
-    }
-  }
-  
-  // M for mute
-  if (e.key.toLowerCase() === 'm' && !e.ctrlKey && !e.metaKey) {
-    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
-      e.preventDefault();
-      eventHandlers.onToggleMute?.();
-    }
-  }
-  
-  // R for refresh leaderboard
-  if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.metaKey) {
-    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
-      e.preventDefault();
-      eventHandlers.onRefreshLeaderboard?.();
-    }
+function handleDailyRewardClaim() {
+  if (eventHandlers.onDailyRewardClaim) {
+    eventHandlers.onDailyRewardClaim();
   }
 }
 
 /**
- * Handle focus events for accessibility
+ * Handle sound toggle
  */
-function handleFocusIn(e) {
-  // Add focus indicator for keyboard users
-  if (e.target.matches('button, a, input, select, textarea')) {
-    e.target.classList.add('keyboard-focus');
+function handleSoundToggle() {
+  if (eventHandlers.onSoundToggle) {
+    eventHandlers.onSoundToggle();
   }
 }
 
 /**
- * Handle focus out events
+ * Handle share button
  */
-function handleFocusOut(e) {
-  e.target.classList.remove('keyboard-focus');
+function handleShare() {
+  const state = getState();
+  if (eventHandlers.onShare) {
+    eventHandlers.onShare(state.score);
+  }
+}
+
+/**
+ * Handle leaderboard refresh
+ */
+function handleRefreshLeaderboard() {
+  if (eventHandlers.onRefreshLeaderboard) {
+    eventHandlers.onRefreshLeaderboard();
+  }
 }
 
 /**
@@ -404,346 +504,321 @@ function handleFocusOut(e) {
  */
 export function updateUI() {
   const state = getState();
-  const leaderboard = getLeaderboard();
-  const user = getUser();
-  const error = getError();
-  const success = getCurrentSuccess();
-  
+  if (!state) return;
+
   // Update score with animation
   updateScore(state.score);
   
-  // Update combo display
+  // Update combo with animation
   updateCombo(state.combo);
+  
+  // Update progress bar
+  updateProgress(state.score);
   
   // Update power-ups
   updatePowerUps(state.powerUps);
   
-  // Update leaderboard
-  updateLeaderboard(leaderboard, user);
-  
   // Update daily reward
-  updateDailyReward(state.dailyClaimed);
+  updateDailyReward(state);
   
-  // Update error/success states
-  if (error) {
-    showErrorToast(error);
-  }
+  // Update user info
+  updateUserInfo();
   
-  if (success) {
-    showSuccessToast(success);
-  }
+  // Update leaderboard
+  updateLeaderboard();
 }
 
 /**
  * Update score display with animation
  */
 function updateScore(newScore) {
-  if (newScore === lastScore) return;
+  if (!scoreEl || newScore === lastScore) return;
   
-  // Animate score change
-  if (newScore > lastScore) {
-    scoreEl.classList.add('score-bump');
-    setTimeout(() => scoreEl.classList.remove('score-bump'), 300);
-  }
+  // Animate score counting up
+  const startScore = lastScore;
+  const increment = (newScore - startScore) / 30;
+  let currentScore = startScore;
+  let frames = 0;
   
-  // Update score text with formatting
-  scoreEl.textContent = formatNumber(newScore);
-  scoreEl.setAttribute('aria-label', t('ui.scoreAnnouncement', { score: newScore }));
+  const animateScore = () => {
+    if (frames < 30 && currentScore < newScore) {
+      currentScore += increment;
+      scoreEl.textContent = Math.floor(currentScore).toLocaleString();
+      frames++;
+      requestAnimationFrame(animateScore);
+    } else {
+      scoreEl.textContent = newScore.toLocaleString();
+    }
+  };
   
+  animateScore();
   lastScore = newScore;
+  
+  // Add score increase effect
+  scoreEl.classList.add('score-increase');
+  setTimeout(() => {
+    scoreEl.classList.remove('score-increase');
+  }, 600);
 }
 
 /**
  * Update combo display
  */
 function updateCombo(newCombo) {
-  const comboContainer = document.getElementById('combo-container');
+  if (!comboEl || newCombo === lastCombo) return;
   
-  if (newCombo <= 1) {
-    comboContainer.classList.remove('active');
-    comboEl.textContent = '';
-    return;
-  }
+  comboEl.textContent = `${newCombo}x`;
   
-  // Show combo
-  comboContainer.classList.add('active');
-  comboEl.textContent = t('ui.comboDisplay', { multiplier: newCombo });
-  comboEl.setAttribute('aria-label', t('ui.comboAnnouncement', { multiplier: newCombo }));
-  
-  // Animate combo change
-  if (newCombo > lastCombo) {
-    comboEl.style.transform = 'scale(1.2)';
-    setTimeout(() => comboEl.style.transform = '', 200);
+  // Special effects for high combos
+  if (newCombo > lastCombo && newCombo > 1) {
+    comboEl.classList.add('combo-increase');
+    
+    // Create floating combo text
+    createFloatingPoints(`${newCombo}x COMBO!`);
+    
+    setTimeout(() => {
+      comboEl.classList.remove('combo-increase');
+    }, 1000);
   }
   
   lastCombo = newCombo;
 }
 
 /**
+ * Update progress bar
+ */
+function updateProgress(score) {
+  if (!progressBar) return;
+  
+  const milestones = [100, 500, 1000, 2000, 5000, 10000, 25000, 50000, 100000];
+  let currentLevel = 1;
+  let nextMilestone = milestones[0];
+  let prevMilestone = 0;
+  
+  // Find current level
+  for (let i = 0; i < milestones.length; i++) {
+    if (score >= milestones[i]) {
+      currentLevel = i + 2;
+      prevMilestone = milestones[i];
+      nextMilestone = milestones[i + 1] || milestones[i] * 2;
+    } else {
+      nextMilestone = milestones[i];
+      break;
+    }
+  }
+  
+  // Calculate progress percentage
+  const progress = ((score - prevMilestone) / (nextMilestone - prevMilestone)) * 100;
+  progressBar.style.width = `${Math.min(progress, 100)}%`;
+  
+  // Update level text
+  const currentLevelEl = document.getElementById('current-level');
+  const nextMilestoneEl = document.getElementById('next-milestone');
+  
+  if (currentLevelEl) {
+    currentLevelEl.textContent = `Level ${currentLevel}`;
+  }
+  
+  if (nextMilestoneEl) {
+    nextMilestoneEl.textContent = `Next: ${nextMilestone.toLocaleString()} pts`;
+  }
+}
+
+/**
  * Update power-ups display
  */
 function updatePowerUps(powerUps) {
-  if (!powerupsGrid) return;
+  if (!powerupsGrid || !powerUps) return;
   
-  // Clear existing power-ups
-  powerupsGrid.innerHTML = '';
-  
-  // Add each power-up
   Object.entries(powerUps).forEach(([id, powerUp]) => {
-    const powerUpEl = createPowerUpElement(id, powerUp);
-    powerupsGrid.appendChild(powerUpEl);
-  });
-}
-
-/**
- * Create power-up element
- */
-function createPowerUpElement(id, powerUp) {
-  const isAvailable = powerUp.unlocked && !powerUp.cooldown;
-  const cooldownTime = powerUp.cooldown > 0 ? Math.ceil(powerUp.cooldown / 1000) : 0;
-  
-  const powerUpEl = document.createElement('div');
-  powerUpEl.className = `powerup-card ${isAvailable ? 'available' : ''} ${cooldownTime > 0 ? 'cooldown' : ''}`;
-  powerUpEl.setAttribute('role', 'button');
-  powerUpEl.setAttribute('tabindex', isAvailable ? '0' : '-1');
-  powerUpEl.setAttribute('aria-label', t(`powerups.${id}.name`));
-  powerUpEl.setAttribute('aria-describedby', `powerup-desc-${id}`);
-  
-  powerUpEl.innerHTML = `
-    <div class="powerup-icon">${getPowerUpIcon(id)}</div>
-    <div class="powerup-name">${t(`powerups.${id}.name`)}</div>
-    <div class="powerup-description" id="powerup-desc-${id}">
-      ${t(`powerups.${id}.description`)}
-    </div>
-    ${cooldownTime > 0 ? `<div class="powerup-cooldown">${cooldownTime}s</div>` : ''}
-  `;
-  
-  // Add event listeners
-  if (isAvailable) {
-    powerUpEl.addEventListener('click', () => eventHandlers.onActivatePowerUp?.(id));
-    powerUpEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        eventHandlers.onActivatePowerUp?.(id);
+    const card = powerupsGrid.querySelector(`[data-powerup="${id}"]`);
+    if (!card) return;
+    
+    // Update unlock status
+    if (powerUp.unlocked) {
+      card.classList.remove('locked');
+      card.classList.add('unlocked');
+    }
+    
+    // Update active status
+    if (powerUp.active) {
+      card.classList.add('active');
+      const statusEl = card.querySelector('.powerup-status');
+      if (statusEl) {
+        statusEl.textContent = `Active (${Math.ceil(powerUp.duration / 1000)}s)`;
       }
-    });
-  }
-  
-  return powerUpEl;
-}
-
-/**
- * Get power-up icon
- */
-function getPowerUpIcon(id) {
-  const icons = {
-    doublePoints: '⚡',
-    rapidFire: '🔥',
-    shield: '🛡️',
-    magnet: '🧲',
-    boost: '🚀'
-  };
-  
-  return icons[id] || '⭐';
-}
-
-/**
- * Update leaderboard display
- */
-function updateLeaderboard(leaderboard, currentUser) {
-  if (!leaderboardList || !Array.isArray(leaderboard)) return;
-  
-  // Clear existing items
-  leaderboardList.innerHTML = '';
-  
-  // Add each leaderboard entry
-  leaderboard.forEach((entry, index) => {
-    const isCurrentUser = currentUser && entry.id === currentUser.id;
-    const listItem = createLeaderboardItem(entry, index + 1, isCurrentUser);
-    leaderboardList.appendChild(listItem);
+    } else if (powerUp.cooldown > 0) {
+      card.classList.add('cooldown');
+      card.classList.remove('active');
+      const statusEl = card.querySelector('.powerup-status');
+      if (statusEl) {
+        statusEl.textContent = `Cooldown (${Math.ceil(powerUp.cooldown / 1000)}s)`;
+      }
+    } else if (powerUp.unlocked) {
+      card.classList.remove('active', 'cooldown');
+      const statusEl = card.querySelector('.powerup-status');
+      if (statusEl) {
+        statusEl.textContent = 'Ready to use!';
+      }
+    }
   });
-  
-  // Add empty state if no entries
-  if (leaderboard.length === 0) {
-    const emptyItem = document.createElement('li');
-    emptyItem.className = 'leaderboard-empty';
-    emptyItem.textContent = t('ui.leaderboardEmpty');
-    emptyItem.setAttribute('role', 'status');
-    leaderboardList.appendChild(emptyItem);
-  }
-}
-
-/**
- * Create leaderboard item element
- */
-function createLeaderboardItem(entry, rank, isCurrentUser) {
-  const listItem = document.createElement('li');
-  listItem.className = `leaderboard-item ${isCurrentUser ? 'current-user' : ''}`;
-  listItem.setAttribute('role', 'listitem');
-  listItem.style.setProperty('--item-index', rank - 1);
-  
-  const rankEl = document.createElement('span');
-  rankEl.className = 'leaderboard-rank';
-  rankEl.textContent = `#${rank}`;
-  rankEl.setAttribute('aria-label', t('ui.rankPosition', { rank }));
-  
-  const playerEl = document.createElement('span');
-  playerEl.className = 'leaderboard-player';
-  playerEl.textContent = entry.name || t('ui.anonymousPlayer');
-  
-  const scoreEl = document.createElement('span');
-  scoreEl.className = 'leaderboard-score';
-  scoreEl.textContent = formatNumber(entry.score);
-  scoreEl.setAttribute('aria-label', t('ui.playerScore', { score: entry.score }));
-  
-  listItem.appendChild(rankEl);
-  listItem.appendChild(playerEl);
-  listItem.appendChild(scoreEl);
-  
-  // Add accessibility attributes
-  listItem.setAttribute('aria-label', 
-    t('ui.leaderboardEntry', { 
-      rank, 
-      name: entry.name || t('ui.anonymousPlayer'), 
-      score: entry.score 
-    })
-  );
-  
-  return listItem;
 }
 
 /**
  * Update daily reward section
  */
-function updateDailyReward(dailyClaimed) {
-  if (!dailyRewardSection) return;
+function updateDailyReward(state) {
+  if (!dailyRewardSection || !state) return;
   
-  if (dailyClaimed) {
-    dailyRewardSection.classList.add('hidden');
+  const claimBtn = dailyRewardSection.querySelector('#claim-daily');
+  if (!claimBtn) return;
+  
+  if (state.dailyClaimed) {
+    claimBtn.disabled = true;
+    claimBtn.textContent = 'Claimed Today!';
+    claimBtn.classList.add('claimed');
   } else {
-    dailyRewardSection.classList.remove('hidden');
+    claimBtn.disabled = false;
+    claimBtn.textContent = 'Claim 100 pts';
+    claimBtn.classList.remove('claimed');
   }
 }
 
 /**
- * Show onboarding overlay
+ * Update user info display
  */
-export function showOnboarding(onComplete) {
-  if (!onboardingOverlay) return;
+function updateUserInfo() {
+  const user = getUser();
+  const userNameEl = document.getElementById('user-name');
   
-  onboardingOverlay.classList.remove('hidden');
+  if (userNameEl && user) {
+    userNameEl.textContent = user.first_name || user.username || 'Player';
+  }
   
-  // Focus management
-  const firstButton = onboardingOverlay.querySelector('button');
-  setTimeout(() => firstButton?.focus(), 100);
-  
-  // Store completion callback
-  onboardingOverlay.dataset.onComplete = 'true';
-  window.onboardingComplete = onComplete;
+  // Update rank display
+  if (rankDisplay) {
+    const leaderboard = getLeaderboard();
+    const userId = user?.id;
+    const rank = leaderboard.findIndex(entry => entry.id === userId) + 1;
+    
+    if (rank > 0) {
+      rankDisplay.textContent = `#${rank}`;
+      rankDisplay.classList.remove('hidden');
+    } else {
+      rankDisplay.classList.add('hidden');
+    }
+  }
 }
 
 /**
- * Hide onboarding overlay
+ * Update leaderboard display
  */
+function updateLeaderboard() {
+  if (!leaderboardList) return;
+  
+  const leaderboard = getLeaderboard();
+  const user = getUser();
+  
+  if (leaderboard.length === 0) {
+    leaderboardList.innerHTML = '<div class="no-data">No players yet. Be the first!</div>';
+    return;
+  }
+  
+  leaderboardList.innerHTML = leaderboard
+    .slice(0, 10) // Show top 10
+    .map((entry, index) => {
+      const isCurrentUser = user && entry.id === user.id;
+      return `
+        <div class="leaderboard-item ${isCurrentUser ? 'current-user' : ''}">
+          <div class="rank-badge rank-${index + 1}">#${index + 1}</div>
+          <div class="player-info">
+            <div class="player-name">${entry.name}</div>
+            <div class="player-score">${entry.score.toLocaleString()} pts</div>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+/**
+ * Create floating point animation
+ */
+function createFloatingPoints(text) {
+  const container = document.getElementById('floating-points');
+  if (!container) return;
+  
+  const element = document.createElement('div');
+  element.className = 'floating-point';
+  element.textContent = text;
+  
+  // Position near slap button
+  if (slapBtn) {
+    const rect = slapBtn.getBoundingClientRect();
+    element.style.left = `${rect.left + rect.width / 2}px`;
+    element.style.top = `${rect.top}px`;
+  }
+  
+  container.appendChild(element);
+  
+  // Remove after animation
+  setTimeout(() => {
+    if (element.parentNode) {
+      element.parentNode.removeChild(element);
+    }
+  }, 2000);
+}
+
+/**
+ * Show/hide loading screen
+ */
+export function hideLoadingScreen() {
+  const loadingScreen = document.getElementById('loading-screen');
+  const appContainer = document.querySelector('.app-container');
+  
+  if (loadingScreen) {
+    loadingScreen.classList.add('fade-out');
+    setTimeout(() => {
+      loadingScreen.style.display = 'none';
+    }, 500);
+  }
+  
+  if (appContainer) {
+    appContainer.style.display = 'block';
+  }
+}
+
+/**
+ * Show/hide onboarding
+ */
+export function showOnboarding() {
+  if (onboardingOverlay) {
+    onboardingOverlay.classList.remove('hidden');
+  }
+}
+
 export function hideOnboarding() {
-  if (!onboardingOverlay) return;
-  
-  onboardingOverlay.classList.add('hidden');
-  
-  // Return focus to slap button
-  setTimeout(focusSlapButton, 100);
-}
-
-/**
- * Handle onboarding completion
- */
-function handleOnboardingComplete() {
-  if (window.onboardingComplete) {
-    window.onboardingComplete();
-    delete window.onboardingComplete;
+  if (onboardingOverlay) {
+    onboardingOverlay.classList.add('hidden');
   }
+  
+  // Focus slap button for immediate gameplay
+  focusSlapButton();
 }
 
 /**
- * Show help overlay
+ * Show/hide help
  */
 export function showHelp() {
-  if (!helpOverlay) return;
-  
-  helpOverlay.classList.remove('hidden');
-  
-  // Focus management
-  const closeButton = helpOverlay.querySelector('#help-close');
-  setTimeout(() => closeButton?.focus(), 100);
+  if (helpOverlay) {
+    helpOverlay.classList.remove('hidden');
+  }
 }
 
-/**
- * Hide help overlay
- */
 export function hideHelp() {
-  if (!helpOverlay) return;
-  
-  helpOverlay.classList.add('hidden');
-  
-  // Return focus to help button
-  const helpBtn = document.getElementById('help-btn');
-  setTimeout(() => helpBtn?.focus(), 100);
-}
-
-/**
- * Show error toast
- */
-function showErrorToast(message) {
-  if (!errorToast) return;
-  
-  const messageEl = document.getElementById('error-message');
-  if (messageEl) {
-    messageEl.textContent = message;
+  if (helpOverlay) {
+    helpOverlay.classList.add('hidden');
   }
-  
-  errorToast.classList.remove('hidden');
-  errorToast.classList.add('show');
-  
-  // Auto-hide after 5 seconds
-  setTimeout(hideErrorToast, 5000);
-}
-
-/**
- * Hide error toast
- */
-function hideErrorToast() {
-  if (!errorToast) return;
-  
-  errorToast.classList.remove('show');
-  setTimeout(() => errorToast.classList.add('hidden'), 300);
-}
-
-/**
- * Show success toast
- */
-function showSuccessToast(message) {
-  if (!successToast) return;
-  
-  const messageEl = document.getElementById('success-message');
-  if (messageEl) {
-    messageEl.textContent = message;
-  }
-  
-  successToast.classList.remove('hidden');
-  successToast.classList.add('show');
-  
-  // Auto-hide after 3 seconds
-  setTimeout(hideSuccessToast, 3000);
-}
-
-/**
- * Hide success toast
- */
-function hideSuccessToast() {
-  if (!successToast) return;
-  
-  successToast.classList.remove('show');
-  setTimeout(() => successToast.classList.add('hidden'), 300);
 }
 
 /**
@@ -756,40 +831,103 @@ export function focusSlapButton() {
 }
 
 /**
+ * Show toast notification
+ */
+export function showToast(message, type = 'info', duration = 3000) {
+  const toast = type === 'error' ? errorToast : successToast;
+  if (!toast) return;
+  
+  const messageEl = toast.querySelector('.toast-message');
+  if (messageEl) {
+    messageEl.textContent = message;
+  }
+  
+  toast.classList.remove('hidden');
+  
+  setTimeout(() => {
+    toast.classList.add('hidden');
+  }, duration);
+}
+
+/**
  * Announce message for screen readers
  */
 export function announce(message) {
-  const announcer = document.getElementById('sr-announcer');
-  if (announcer) {
-    announcer.textContent = message;
+  // Create live region for screen reader announcements
+  let liveRegion = document.getElementById('live-region');
+  if (!liveRegion) {
+    liveRegion = document.createElement('div');
+    liveRegion.id = 'live-region';
+    liveRegion.setAttribute('aria-live', 'polite');
+    liveRegion.setAttribute('aria-atomic', 'true');
+    liveRegion.className = 'sr-only';
+    document.body.appendChild(liveRegion);
+  }
+  
+  liveRegion.textContent = message;
+}
+
+/**
+ * Setup accessibility features
+ */
+function setupAccessibility() {
+  // Add skip link
+  const skipLink = document.createElement('a');
+  skipLink.href = '#slap-btn';
+  skipLink.textContent = 'Skip to main game';
+  skipLink.className = 'skip-link';
+  document.body.insertBefore(skipLink, document.body.firstChild);
+  
+  // Add ARIA labels and roles
+  if (slapBtn) {
+    slapBtn.setAttribute('aria-describedby', 'slap-description');
     
-    // Clear after announcement
-    setTimeout(() => {
-      announcer.textContent = '';
-    }, 1000);
+    const description = document.createElement('div');
+    description.id = 'slap-description';
+    description.className = 'sr-only';
+    description.textContent = 'Main game button. Tap repeatedly to earn points and build combos.';
+    slapBtn.parentNode.insertBefore(description, slapBtn.nextSibling);
+  }
+  
+  // Set up reduced motion preferences
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.body.classList.add('reduced-motion');
+  }
+  
+  // High contrast support
+  if (window.matchMedia('(prefers-contrast: high)').matches) {
+    document.body.classList.add('high-contrast');
   }
 }
 
 /**
- * Format number for display
+ * Update theme
  */
-function formatNumber(num) {
-  if (num < 1000) return num.toString();
-  if (num < 1000000) return (num / 1000).toFixed(1) + 'K';
-  if (num < 1000000000) return (num / 1000000).toFixed(1) + 'M';
-  return (num / 1000000000).toFixed(1) + 'B';
+export function updateTheme(theme) {
+  currentTheme = theme;
+  document.documentElement.setAttribute('data-theme', theme);
 }
 
 /**
- * Clean up timeouts and listeners
+ * Cleanup function
  */
 export function cleanup() {
   // Clear all animation timeouts
   animationTimeouts.forEach(timeout => clearTimeout(timeout));
   animationTimeouts.clear();
   
-  // Remove global event listeners
-  document.removeEventListener('keydown', handleGlobalKeydown);
-  document.removeEventListener('focusin', handleFocusIn);
-  document.removeEventListener('focusout', handleFocusOut);
+  // Remove event listeners
+  if (slapBtn) {
+    slapBtn.replaceWith(slapBtn.cloneNode(true));
+  }
+}
+
+// Export for debugging
+if (window.location.hostname === 'localhost') {
+  window.uiDebug = {
+    updateUI,
+    showToast,
+    createFloatingPoints,
+    announce
+  };
 }

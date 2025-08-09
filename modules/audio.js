@@ -1,335 +1,292 @@
+
 /**
- * Audio Module
- * Handles sound effects, background music, and audio management
+ * Audio Module - Handles all sound effects, music, and audio feedback
+ * Implements Web Audio API with fallback to HTML5 audio
  */
 
-import { logError, logInfo, logDev } from './testing.js';
-import { loadState, saveState } from './persistence.js';
+import { logDev, logError } from './testing.js';
 
 // Audio configuration
-const AUDIO_SETTINGS_KEY = 'ngs_audio_settings';
-const AUDIO_CACHE_KEY = 'ngs_audio_cache';
-
-// Audio files mapping
-const AUDIO_FILES = {
-  hit: './client/public/sounds/hit.mp3',
-  success: './client/public/sounds/success.mp3',
-  background: './client/public/sounds/background.mp3'
+const AUDIO_CONFIG = {
+  masterVolume: 0.7,
+  sfxVolume: 0.8,
+  musicVolume: 0.4,
+  fadeTime: 1000,
+  maxConcurrentSounds: 8,
+  audioFormats: ['mp3', 'ogg', 'wav'],
+  preloadSounds: true
 };
 
 // Audio state
 let audioContext = null;
-let audioBuffers = new Map();
-let audioSettings = {
-  masterVolume: 0.7,
-  sfxVolume: 0.8,
-  musicVolume: 0.5,
-  muted: false
-};
-
-let backgroundMusic = null;
-let isBackgroundMusicPlaying = false;
-let isAudioInitialized = false;
-let audioLoadingPromises = new Map();
-
-// Web Audio nodes
 let masterGainNode = null;
 let sfxGainNode = null;
 let musicGainNode = null;
+let isMuted = false;
+let isInitialized = false;
+let audioBuffers = new Map();
+let activeSounds = new Set();
+let backgroundMusic = null;
+
+// Sound definitions
+const SOUNDS = {
+  hit: {
+    url: './client/public/sounds/hit.mp3',
+    volume: 0.6,
+    variations: 1
+  },
+  success: {
+    url: './client/public/sounds/success.mp3',
+    volume: 0.8,
+    variations: 1
+  },
+  background: {
+    url: './client/public/sounds/background.mp3',
+    volume: 0.3,
+    loop: true,
+    type: 'music'
+  },
+  combo: {
+    // Generated dynamically based on combo level
+    type: 'synthesized',
+    baseFreq: 220,
+    volume: 0.5
+  },
+  powerup: {
+    type: 'synthesized',
+    baseFreq: 440,
+    volume: 0.7
+  },
+  achievement: {
+    type: 'synthesized',
+    baseFreq: 523,
+    volume: 0.8
+  },
+  error: {
+    type: 'synthesized',
+    baseFreq: 110,
+    volume: 0.6
+  },
+  notification: {
+    type: 'synthesized',
+    baseFreq: 880,
+    volume: 0.5
+  }
+};
 
 /**
  * Initialize audio system
  */
 export async function initAudio() {
   try {
-    logInfo('🔊 Initializing audio system...');
-
-    // Load audio settings
-    await loadAudioSettings();
-
-    // Initialize Web Audio API
-    await initWebAudio();
-
-    // Load audio files
-    await loadAudioFiles();
-
-    // Set up audio nodes
-    setupAudioNodes();
-
-    isAudioInitialized = true;
-    logInfo('✅ Audio system initialized');
-
-  } catch (error) {
-    logError('Error initializing audio:', error);
-    // Continue without audio rather than breaking the app
-  }
-}
-
-/**
- * Initialize Web Audio Context
- */
-async function initWebAudio() {
-  try {
     // Create audio context
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) {
-      throw new Error('Web Audio API not supported');
-    }
-
-    audioContext = new AudioContextClass();
-
-    // Handle browser autoplay restrictions
-    if (audioContext.state === 'suspended') {
-      logDev('Audio context suspended - will resume on user interaction');
-      
-      // Resume on first user interaction
-      const resumeAudio = async () => {
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
-          logDev('Audio context resumed');
-        }
-        
-        // Remove listeners after first interaction
-        document.removeEventListener('click', resumeAudio);
-        document.removeEventListener('touchstart', resumeAudio);
-        document.removeEventListener('keydown', resumeAudio);
-      };
-
-      document.addEventListener('click', resumeAudio, { once: true });
-      document.addEventListener('touchstart', resumeAudio, { once: true });
-      document.addEventListener('keydown', resumeAudio, { once: true });
-    }
-
-  } catch (error) {
-    logError('Error initializing Web Audio:', error);
-    throw error;
-  }
-}
-
-/**
- * Set up audio nodes and routing
- */
-function setupAudioNodes() {
-  if (!audioContext) return;
-
-  try {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    
     // Create gain nodes for volume control
     masterGainNode = audioContext.createGain();
     sfxGainNode = audioContext.createGain();
     musicGainNode = audioContext.createGain();
-
-    // Connect nodes
+    
+    // Connect gain nodes
     sfxGainNode.connect(masterGainNode);
     musicGainNode.connect(masterGainNode);
     masterGainNode.connect(audioContext.destination);
-
+    
     // Set initial volumes
-    updateAudioVolumes();
-
-    logDev('Audio nodes setup complete');
-
+    setMasterVolume(AUDIO_CONFIG.masterVolume);
+    setSfxVolume(AUDIO_CONFIG.sfxVolume);
+    setMusicVolume(AUDIO_CONFIG.musicVolume);
+    
+    // Load mute state from localStorage
+    const savedMuteState = localStorage.getItem('ngs_audio_muted');
+    if (savedMuteState === 'true') {
+      toggleMute();
+    }
+    
+    // Preload audio files
+    if (AUDIO_CONFIG.preloadSounds) {
+      await preloadAudio();
+    }
+    
+    // Set up audio event listeners
+    setupAudioEventListeners();
+    
+    isInitialized = true;
+    logDev('✅ Audio system initialized successfully');
+    
   } catch (error) {
-    logError('Error setting up audio nodes:', error);
+    logError('Failed to initialize audio system:', error);
+    // Fallback to silent mode
+    isInitialized = false;
   }
 }
 
 /**
- * Load audio files
+ * Play hit sound with variations
  */
-async function loadAudioFiles() {
-  const loadPromises = Object.entries(AUDIO_FILES).map(async ([key, url]) => {
-    try {
-      if (audioLoadingPromises.has(key)) {
-        return audioLoadingPromises.get(key);
-      }
+export function playHitSound() {
+  if (!isInitialized || isMuted) return;
+  
+  const sound = SOUNDS.hit;
+  playSound('hit', {
+    volume: sound.volume,
+    pitch: 1 + (Math.random() - 0.5) * 0.2 // Slight pitch variation
+  });
+}
 
-      const loadPromise = loadAudioFile(key, url);
-      audioLoadingPromises.set(key, loadPromise);
-      
-      return loadPromise;
+/**
+ * Play success sound
+ */
+export function playSuccessSound() {
+  if (!isInitialized || isMuted) return;
+  
+  playSound('success', {
+    volume: SOUNDS.success.volume
+  });
+}
 
-    } catch (error) {
-      logError(`Error loading audio file ${key}:`, error);
-      return null;
+/**
+ * Play combo sound with increasing pitch
+ */
+export function playComboSound(comboLevel) {
+  if (!isInitialized || isMuted) return;
+  
+  const sound = SOUNDS.combo;
+  const pitchMultiplier = Math.min(1 + (comboLevel * 0.1), 3); // Max 3x pitch
+  
+  playSynthesizedSound(sound.baseFreq * pitchMultiplier, {
+    volume: sound.volume,
+    duration: 200,
+    waveform: 'sawtooth',
+    envelope: {
+      attack: 0.01,
+      decay: 0.1,
+      sustain: 0.3,
+      release: 0.1
     }
   });
-
-  await Promise.allSettled(loadPromises);
-  logDev('Audio files loading completed');
 }
 
 /**
- * Load individual audio file
+ * Play power-up activation sound
  */
-async function loadAudioFile(key, url) {
-  try {
-    logDev(`Loading audio file: ${key} from ${url}`);
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch audio: ${response.status} ${response.statusText}`);
+export function playPowerUpSound() {
+  if (!isInitialized || isMuted) return;
+  
+  const sound = SOUNDS.powerup;
+  playSynthesizedSound(sound.baseFreq, {
+    volume: sound.volume,
+    duration: 500,
+    waveform: 'square',
+    envelope: {
+      attack: 0.05,
+      decay: 0.2,
+      sustain: 0.5,
+      release: 0.3
+    },
+    filter: {
+      type: 'lowpass',
+      frequency: 2000,
+      Q: 1
     }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    
-    audioBuffers.set(key, audioBuffer);
-    logDev(`Audio file loaded: ${key}`);
-
-    return audioBuffer;
-
-  } catch (error) {
-    logError(`Error loading audio file ${key}:`, error);
-    
-    // Create silent buffer as fallback
-    const fallbackBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 0.1, audioContext.sampleRate);
-    audioBuffers.set(key, fallbackBuffer);
-    
-    return null;
-  }
+  });
 }
 
 /**
- * Play hit sound effect
+ * Play achievement unlock sound
  */
-export function playHitSound(volume = 1) {
-  if (!isAudioInitialized || audioSettings.muted) return;
-
-  try {
-    const buffer = audioBuffers.get('hit');
-    if (!buffer) return;
-
-    playSound(buffer, sfxGainNode, volume * audioSettings.sfxVolume);
-
-  } catch (error) {
-    logError('Error playing hit sound:', error);
-  }
+export function playAchievementSound() {
+  if (!isInitialized || isMuted) return;
+  
+  const sound = SOUNDS.achievement;
+  
+  // Play a chord progression
+  const frequencies = [
+    sound.baseFreq,        // C5
+    sound.baseFreq * 1.25, // E5
+    sound.baseFreq * 1.5,  // G5
+    sound.baseFreq * 2     // C6
+  ];
+  
+  frequencies.forEach((freq, index) => {
+    setTimeout(() => {
+      playSynthesizedSound(freq, {
+        volume: sound.volume * 0.7,
+        duration: 800,
+        waveform: 'sine',
+        envelope: {
+          attack: 0.1,
+          decay: 0.3,
+          sustain: 0.4,
+          release: 0.4
+        }
+      });
+    }, index * 100);
+  });
 }
 
 /**
- * Play success sound effect
+ * Play error sound
  */
-export function playSuccessSound(volume = 1) {
-  if (!isAudioInitialized || audioSettings.muted) return;
-
-  try {
-    const buffer = audioBuffers.get('success');
-    if (!buffer) return;
-
-    playSound(buffer, sfxGainNode, volume * audioSettings.sfxVolume);
-
-  } catch (error) {
-    logError('Error playing success sound:', error);
-  }
+export function playErrorSound() {
+  if (!isInitialized || isMuted) return;
+  
+  const sound = SOUNDS.error;
+  playSynthesizedSound(sound.baseFreq, {
+    volume: sound.volume,
+    duration: 300,
+    waveform: 'sawtooth',
+    envelope: {
+      attack: 0.05,
+      decay: 0.1,
+      sustain: 0.2,
+      release: 0.15
+    }
+  });
 }
 
 /**
- * Play combo sound with pitch variation
+ * Play notification sound
  */
-export function playComboSound(comboLevel = 1) {
-  if (!isAudioInitialized || audioSettings.muted) return;
-
-  try {
-    const buffer = audioBuffers.get('hit');
-    if (!buffer) return;
-
-    // Increase pitch based on combo level
-    const pitchMultiplier = Math.min(1 + (comboLevel - 1) * 0.1, 2.0);
-    const volume = Math.min(0.8 + comboLevel * 0.1, 1.0);
-
-    playSound(buffer, sfxGainNode, volume * audioSettings.sfxVolume, pitchMultiplier);
-
-  } catch (error) {
-    logError('Error playing combo sound:', error);
-  }
+export function playNotificationSound() {
+  if (!isInitialized || isMuted) return;
+  
+  const sound = SOUNDS.notification;
+  playSynthesizedSound(sound.baseFreq, {
+    volume: sound.volume,
+    duration: 200,
+    waveform: 'sine',
+    envelope: {
+      attack: 0.01,
+      decay: 0.05,
+      sustain: 0.7,
+      release: 0.15
+    }
+  });
 }
 
 /**
- * Play background music
+ * Start background music
  */
-export function playBackgroundMusic() {
-  if (!isAudioInitialized || audioSettings.muted || isBackgroundMusicPlaying) return;
-
-  try {
-    const buffer = audioBuffers.get('background');
-    if (!buffer) return;
-
-    // Stop any existing background music
-    stopBackgroundMusic();
-
-    // Create and configure source
-    backgroundMusic = audioContext.createBufferSource();
-    backgroundMusic.buffer = buffer;
-    backgroundMusic.loop = true;
-    backgroundMusic.connect(musicGainNode);
-
-    // Set up end event
-    backgroundMusic.onended = () => {
-      isBackgroundMusicPlaying = false;
-      backgroundMusic = null;
-    };
-
-    backgroundMusic.start(0);
-    isBackgroundMusicPlaying = true;
-
-    logDev('Background music started');
-
-  } catch (error) {
-    logError('Error playing background music:', error);
-  }
+export function startBackgroundMusic() {
+  if (!isInitialized || isMuted || backgroundMusic) return;
+  
+  playSound('background', {
+    volume: SOUNDS.background.volume,
+    loop: true,
+    type: 'music'
+  }).then(sound => {
+    backgroundMusic = sound;
+  });
 }
 
 /**
  * Stop background music
  */
 export function stopBackgroundMusic() {
-  if (backgroundMusic && isBackgroundMusicPlaying) {
-    try {
-      backgroundMusic.stop();
-      backgroundMusic = null;
-      isBackgroundMusicPlaying = false;
-      logDev('Background music stopped');
-    } catch (error) {
-      logError('Error stopping background music:', error);
-    }
-  }
-}
-
-/**
- * Generic sound playing function
- */
-function playSound(buffer, gainNode, volume = 1, pitchMultiplier = 1) {
-  if (!audioContext || !buffer || !gainNode) return;
-
-  try {
-    const source = audioContext.createBufferSource();
-    const gain = audioContext.createGain();
-
-    source.buffer = buffer;
-    source.playbackRate.value = pitchMultiplier;
-
-    source.connect(gain);
-    gain.connect(gainNode);
-
-    // Set volume with envelope for smooth playback
-    gain.gain.setValueAtTime(0, audioContext.currentTime);
-    gain.gain.linearRampToValueAtTime(volume, audioContext.currentTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + buffer.duration);
-
-    source.start(0);
-
-    // Clean up after playback
-    setTimeout(() => {
-      try {
-        source.disconnect();
-        gain.disconnect();
-      } catch (e) {
-        // Ignore cleanup errors
-      }
-    }, buffer.duration * 1000 + 100);
-
-  } catch (error) {
-    logError('Error playing sound:', error);
+  if (backgroundMusic) {
+    fadeOut(backgroundMusic, AUDIO_CONFIG.fadeTime);
+    backgroundMusic = null;
   }
 }
 
@@ -337,178 +294,310 @@ function playSound(buffer, gainNode, volume = 1, pitchMultiplier = 1) {
  * Toggle mute state
  */
 export function toggleMute() {
-  audioSettings.muted = !audioSettings.muted;
+  isMuted = !isMuted;
   
-  if (audioSettings.muted) {
-    // Mute all audio
-    if (masterGainNode) {
-      masterGainNode.gain.setValueAtTime(0, audioContext.currentTime);
-    }
+  if (isMuted) {
+    setMasterVolume(0);
     stopBackgroundMusic();
-    logDev('Audio muted');
   } else {
-    // Unmute audio
-    updateAudioVolumes();
-    logDev('Audio unmuted');
+    setMasterVolume(AUDIO_CONFIG.masterVolume);
+    if (SOUNDS.background && !backgroundMusic) {
+      startBackgroundMusic();
+    }
   }
-
-  saveAudioSettings();
   
-  // Notify UI about mute state change
-  const event = new CustomEvent('audioMuteToggled', { 
-    detail: { muted: audioSettings.muted } 
-  });
-  document.dispatchEvent(event);
+  // Save mute state
+  localStorage.setItem('ngs_audio_muted', isMuted.toString());
+  
+  // Update UI
+  updateMuteButton();
+  
+  return isMuted;
 }
 
 /**
- * Set master volume (0.0 to 1.0)
+ * Get current mute state
  */
-export function setMasterVolume(volume) {
-  audioSettings.masterVolume = Math.max(0, Math.min(1, volume));
-  updateAudioVolumes();
-  saveAudioSettings();
+export function isMutedState() {
+  return isMuted;
 }
 
 /**
- * Set SFX volume (0.0 to 1.0)
+ * Play a sound by name
  */
-export function setSFXVolume(volume) {
-  audioSettings.sfxVolume = Math.max(0, Math.min(1, volume));
-  updateAudioVolumes();
-  saveAudioSettings();
-}
-
-/**
- * Set music volume (0.0 to 1.0)
- */
-export function setMusicVolume(volume) {
-  audioSettings.musicVolume = Math.max(0, Math.min(1, volume));
-  updateAudioVolumes();
-  saveAudioSettings();
-}
-
-/**
- * Update audio node volumes
- */
-function updateAudioVolumes() {
-  if (!audioContext || audioSettings.muted) return;
-
-  try {
-    const currentTime = audioContext.currentTime;
-
-    if (masterGainNode) {
-      masterGainNode.gain.setValueAtTime(audioSettings.masterVolume, currentTime);
-    }
-
-    if (sfxGainNode) {
-      sfxGainNode.gain.setValueAtTime(audioSettings.sfxVolume, currentTime);
-    }
-
-    if (musicGainNode) {
-      musicGainNode.gain.setValueAtTime(audioSettings.musicVolume, currentTime);
-    }
-
-  } catch (error) {
-    logError('Error updating audio volumes:', error);
+async function playSound(soundName, options = {}) {
+  if (!isInitialized || isMuted) return null;
+  
+  const sound = SOUNDS[soundName];
+  if (!sound) {
+    logError('Sound not found:', soundName);
+    return null;
   }
-}
-
-/**
- * Get current audio settings
- */
-export function getAudioSettings() {
-  return { ...audioSettings };
-}
-
-/**
- * Check if audio is supported
- */
-export function isAudioSupported() {
-  return !!(window.AudioContext || window.webkitAudioContext);
-}
-
-/**
- * Check if audio is muted
- */
-export function isMuted() {
-  return audioSettings.muted;
-}
-
-/**
- * Load audio settings from storage
- */
-async function loadAudioSettings() {
+  
   try {
-    const saved = await loadState(AUDIO_SETTINGS_KEY);
-    if (saved && typeof saved === 'object') {
-      audioSettings = { ...audioSettings, ...saved };
+    let source;
+    
+    if (sound.type === 'synthesized') {
+      return playSynthesizedSound(sound.baseFreq, options);
     }
-    logDev('Audio settings loaded:', audioSettings);
-  } catch (error) {
-    logError('Error loading audio settings:', error);
-  }
-}
-
-/**
- * Save audio settings to storage
- */
-async function saveAudioSettings() {
-  try {
-    await saveState(AUDIO_SETTINGS_KEY, audioSettings);
-    logDev('Audio settings saved');
-  } catch (error) {
-    logError('Error saving audio settings:', error);
-  }
-}
-
-/**
- * Create audio visualizer (optional feature)
- */
-export function createAudioVisualizer(canvas) {
-  if (!audioContext || !canvas) return null;
-
-  try {
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 256;
     
-    masterGainNode.connect(analyser);
+    // Check if we have a preloaded buffer
+    const buffer = audioBuffers.get(soundName);
+    if (buffer) {
+      source = audioContext.createBufferSource();
+      source.buffer = buffer;
+    } else {
+      // Load and play audio file
+      const audioBuffer = await loadAudioFile(sound.url);
+      if (!audioBuffer) return null;
+      
+      source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      
+      // Cache the buffer
+      audioBuffers.set(soundName, audioBuffer);
+    }
     
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
+    // Create gain node for this sound
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = (options.volume || 1) * (sound.volume || 1);
     
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-
-    function draw() {
-      requestAnimationFrame(draw);
-      
-      analyser.getByteFrequencyData(dataArray);
-      
-      ctx.fillStyle = 'rgb(0, 0, 0)';
-      ctx.fillRect(0, 0, width, height);
-      
-      const barWidth = (width / bufferLength) * 2.5;
-      let barHeight;
-      let x = 0;
-      
-      for (let i = 0; i < bufferLength; i++) {
-        barHeight = dataArray[i] / 255 * height;
-        
-        ctx.fillStyle = `rgb(${barHeight + 100}, 255, ${barHeight})`;
-        ctx.fillRect(x, height - barHeight, barWidth, barHeight);
-        
-        x += barWidth + 1;
+    // Apply pitch if specified
+    if (options.pitch) {
+      source.playbackRate.value = options.pitch;
+    }
+    
+    // Connect nodes
+    source.connect(gainNode);
+    
+    if (options.type === 'music') {
+      gainNode.connect(musicGainNode);
+    } else {
+      gainNode.connect(sfxGainNode);
+    }
+    
+    // Set loop if specified
+    if (options.loop) {
+      source.loop = true;
+    }
+    
+    // Limit concurrent sounds
+    if (activeSounds.size >= AUDIO_CONFIG.maxConcurrentSounds) {
+      const oldestSound = activeSounds.values().next().value;
+      if (oldestSound && oldestSound.stop) {
+        oldestSound.stop();
       }
     }
     
-    draw();
-    return { analyser, draw };
-
+    // Track active sound
+    activeSounds.add(source);
+    
+    // Clean up when sound ends
+    source.addEventListener('ended', () => {
+      activeSounds.delete(source);
+    });
+    
+    // Start playing
+    source.start(0);
+    
+    return source;
+    
   } catch (error) {
-    logError('Error creating audio visualizer:', error);
+    logError('Error playing sound:', soundName, error);
     return null;
+  }
+}
+
+/**
+ * Play synthesized sound
+ */
+function playSynthesizedSound(frequency, options = {}) {
+  if (!isInitialized || isMuted) return null;
+  
+  try {
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    const filterNode = audioContext.createBiquadFilter();
+    
+    // Set oscillator properties
+    oscillator.type = options.waveform || 'sine';
+    oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+    
+    // Set filter properties
+    if (options.filter) {
+      filterNode.type = options.filter.type;
+      filterNode.frequency.setValueAtTime(options.filter.frequency, audioContext.currentTime);
+      filterNode.Q.setValueAtTime(options.filter.Q, audioContext.currentTime);
+    }
+    
+    // Set up envelope
+    const envelope = options.envelope || { attack: 0.1, decay: 0.2, sustain: 0.5, release: 0.2 };
+    const duration = options.duration || 500;
+    const volume = options.volume || 0.5;
+    const now = audioContext.currentTime;
+    
+    // ADSR envelope
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(volume, now + envelope.attack);
+    gainNode.gain.linearRampToValueAtTime(volume * envelope.sustain, now + envelope.attack + envelope.decay);
+    gainNode.gain.setValueAtTime(volume * envelope.sustain, now + duration / 1000 - envelope.release);
+    gainNode.gain.linearRampToValueAtTime(0, now + duration / 1000);
+    
+    // Connect nodes
+    oscillator.connect(options.filter ? filterNode : gainNode);
+    if (options.filter) filterNode.connect(gainNode);
+    gainNode.connect(sfxGainNode);
+    
+    // Track active sound
+    activeSounds.add(oscillator);
+    
+    // Start and stop
+    oscillator.start(now);
+    oscillator.stop(now + duration / 1000);
+    
+    oscillator.addEventListener('ended', () => {
+      activeSounds.delete(oscillator);
+    });
+    
+    return oscillator;
+    
+  } catch (error) {
+    logError('Error playing synthesized sound:', error);
+    return null;
+  }
+}
+
+/**
+ * Load audio file
+ */
+async function loadAudioFile(url) {
+  try {
+    const response = await fetch(url);
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    return audioBuffer;
+  } catch (error) {
+    logError('Error loading audio file:', url, error);
+    return null;
+  }
+}
+
+/**
+ * Preload audio files
+ */
+async function preloadAudio() {
+  const preloadPromises = Object.entries(SOUNDS)
+    .filter(([_, sound]) => sound.url && sound.type !== 'synthesized')
+    .map(async ([name, sound]) => {
+      try {
+        const buffer = await loadAudioFile(sound.url);
+        if (buffer) {
+          audioBuffers.set(name, buffer);
+          logDev(`Preloaded audio: ${name}`);
+        }
+      } catch (error) {
+        logError(`Failed to preload audio: ${name}`, error);
+      }
+    });
+  
+  await Promise.allSettled(preloadPromises);
+  logDev(`Audio preloading completed. Loaded ${audioBuffers.size} sounds.`);
+}
+
+/**
+ * Fade out audio
+ */
+function fadeOut(source, duration) {
+  if (!source || !audioContext) return;
+  
+  const gainNode = audioContext.createGain();
+  gainNode.gain.setValueAtTime(1, audioContext.currentTime);
+  gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + duration / 1000);
+  
+  setTimeout(() => {
+    if (source.stop) source.stop();
+  }, duration);
+}
+
+/**
+ * Set master volume
+ */
+function setMasterVolume(volume) {
+  if (masterGainNode) {
+    masterGainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+  }
+}
+
+/**
+ * Set SFX volume
+ */
+function setSfxVolume(volume) {
+  if (sfxGainNode) {
+    sfxGainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+  }
+}
+
+/**
+ * Set music volume
+ */
+function setMusicVolume(volume) {
+  if (musicGainNode) {
+    musicGainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+  }
+}
+
+/**
+ * Set up audio event listeners
+ */
+function setupAudioEventListeners() {
+  // Resume audio context on user interaction (required by browsers)
+  const resumeAudio = () => {
+    if (audioContext && audioContext.state === 'suspended') {
+      audioContext.resume().then(() => {
+        logDev('Audio context resumed');
+      });
+    }
+  };
+  
+  // Add event listeners for user interaction
+  ['click', 'touchstart', 'keydown'].forEach(eventType => {
+    document.addEventListener(eventType, resumeAudio, { once: true });
+  });
+  
+  // Handle page visibility changes
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      // Page is hidden - pause audio
+      if (backgroundMusic) {
+        stopBackgroundMusic();
+      }
+    } else {
+      // Page is visible - resume audio
+      if (!isMuted && SOUNDS.background && !backgroundMusic) {
+        setTimeout(() => startBackgroundMusic(), 1000);
+      }
+    }
+  });
+}
+
+/**
+ * Update mute button appearance
+ */
+function updateMuteButton() {
+  const soundBtn = document.getElementById('sound-btn');
+  if (!soundBtn) return;
+  
+  const icon = soundBtn.querySelector('svg path');
+  if (!icon) return;
+  
+  if (isMuted) {
+    // Muted icon
+    icon.setAttribute('d', 'M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z');
+    soundBtn.setAttribute('aria-label', 'Unmute sound');
+  } else {
+    // Unmuted icon
+    icon.setAttribute('d', 'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z');
+    soundBtn.setAttribute('aria-label', 'Mute sound');
   }
 }
 
@@ -516,48 +605,33 @@ export function createAudioVisualizer(canvas) {
  * Cleanup audio resources
  */
 export function cleanup() {
-  try {
-    stopBackgroundMusic();
-    
-    if (audioContext && audioContext.state !== 'closed') {
-      audioContext.close();
-    }
-    
-    audioBuffers.clear();
-    audioLoadingPromises.clear();
-    
-    audioContext = null;
-    masterGainNode = null;
-    sfxGainNode = null;
-    musicGainNode = null;
-    isAudioInitialized = false;
-    
-    logDev('Audio system cleaned up');
-
-  } catch (error) {
-    logError('Error cleaning up audio:', error);
+  // Stop all active sounds
+  activeSounds.forEach(source => {
+    if (source.stop) source.stop();
+  });
+  activeSounds.clear();
+  
+  // Stop background music
+  stopBackgroundMusic();
+  
+  // Close audio context
+  if (audioContext && audioContext.state !== 'closed') {
+    audioContext.close();
   }
+  
+  // Clear buffers
+  audioBuffers.clear();
+  
+  isInitialized = false;
 }
 
-/**
- * Handle page visibility changes
- */
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    // Pause background music when page is hidden
-    if (isBackgroundMusicPlaying) {
-      stopBackgroundMusic();
-    }
-  } else {
-    // Resume background music when page is visible (if not muted)
-    if (!audioSettings.muted && isAudioInitialized) {
-      setTimeout(playBackgroundMusic, 500);
-    }
-  }
-});
-
-// Initialize audio on module load if in browser environment
-if (typeof window !== 'undefined' && isAudioSupported()) {
-  // Delay initialization to allow other modules to load first
-  setTimeout(initAudio, 100);
+// Export for debugging
+if (window.location.hostname === 'localhost') {
+  window.audioDebug = {
+    audioContext,
+    activeSounds: activeSounds.size,
+    buffersLoaded: audioBuffers.size,
+    isMuted,
+    cleanup
+  };
 }
