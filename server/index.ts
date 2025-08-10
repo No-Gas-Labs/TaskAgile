@@ -60,7 +60,7 @@ app.use((req, res, next) => {
   }
 
   // Initialize WebSocket server for multiplayer
-  const wss = new WebSocketServer({ 
+  const wss = new WebSocketServer({
     server,
     // Add ping/pong to detect broken connections
     pingTimeout: 60000,
@@ -71,7 +71,7 @@ app.use((req, res, next) => {
   wss.on('error', (error) => {
     log(`WebSocket Server Error: ${error.message}`);
   });
-  
+
   // Multiplayer game state
   let players: Record<number, {
     id: number;
@@ -85,14 +85,14 @@ app.use((req, res, next) => {
     name?: string;
   }> = {};
   let nextId = 1;
-  
+
   function broadcast(data: any) {
     const msg = JSON.stringify(data);
     wss.clients.forEach(client => {
       if (client.readyState === 1) client.send(msg); // WebSocket.OPEN = 1
     });
   }
-  
+
   function resetGame() {
     for (const id in players) {
       players[id].health = 100;
@@ -105,7 +105,7 @@ app.use((req, res, next) => {
     }
     broadcast({ type: 'gameReset', players });
   }
-  
+
   wss.on('connection', (ws) => {
     const playerId = nextId++;
     players[playerId] = {
@@ -119,20 +119,19 @@ app.use((req, res, next) => {
       combo: 1
     };
 
+    ws.send(JSON.stringify({ type: 'init', id: playerId, players }));
+    broadcast({ type: 'playerJoined', player: players[playerId] });
+
+    log(`Player ${playerId} joined. Total players: ${Object.keys(players).length}`);
+
     // Add error handling for WebSocket
     ws.on('error', (error) => {
       log(`WebSocket error for player ${playerId}: ${error.message}`);
-      // Clean up player on error
       if (players[playerId]) {
         delete players[playerId];
         broadcast({ type: 'playerLeft', id: playerId });
       }
     });
-
-    ws.send(JSON.stringify({ type: 'init', id: playerId, players }));
-    broadcast({ type: 'playerJoined', player: players[playerId] });
-    
-    log(`Player ${playerId} joined. Total players: ${Object.keys(players).length}`);
 
     ws.on('message', (message) => {
       try {
@@ -149,7 +148,7 @@ app.use((req, res, next) => {
 
         else if (data.type === 'slap') {
           if (!players[playerId].alive || players[playerId].gas < 20) return;
-          
+
           players[playerId].gas -= 20;
           players[playerId].score += 10;
           players[playerId].combo = Math.min(players[playerId].combo + 1, 50);
@@ -160,20 +159,20 @@ app.use((req, res, next) => {
             const dx = players[targetId].x - players[playerId].x;
             const dy = players[targetId].y - players[playerId].y;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            
+
             if (dist < 60) { // slap range
               players[targetId].health -= 25;
               players[playerId].score += 50 * players[playerId].combo;
-              
+
               if (players[targetId].health <= 0) {
                 players[targetId].alive = false;
                 players[playerId].score += 200;
                 broadcast({ type: 'playerDied', id: targetId, killerId: playerId });
               }
-              
-              broadcast({ 
-                type: 'playerHit', 
-                id: targetId, 
+
+              broadcast({
+                type: 'playerHit',
+                id: targetId,
                 health: players[targetId].health,
                 attacker: playerId,
                 damage: 25
@@ -181,9 +180,9 @@ app.use((req, res, next) => {
             }
           }
 
-          broadcast({ 
-            type: 'playerUpdate', 
-            id: playerId, 
+          broadcast({
+            type: 'playerUpdate',
+            id: playerId,
             gas: players[playerId].gas,
             score: players[playerId].score,
             combo: players[playerId].combo
@@ -217,11 +216,11 @@ app.use((req, res, next) => {
         activePlayers++;
       }
     }
-    
+
     if (activePlayers > 0) {
       broadcast({ type: 'gasRecharge', players });
     }
-    
+
     // Auto-reset if only one player left and multiple were playing
     if (activePlayers === 1 && Object.keys(players).length > 1) {
       setTimeout(resetGame, 3000);
