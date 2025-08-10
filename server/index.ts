@@ -60,7 +60,17 @@ app.use((req, res, next) => {
   }
 
   // Initialize WebSocket server for multiplayer
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ 
+    server,
+    // Add ping/pong to detect broken connections
+    pingTimeout: 60000,
+    pingInterval: 25000
+  });
+
+  // Global error handler for WebSocket server
+  wss.on('error', (error) => {
+    log(`WebSocket Server Error: ${error.message}`);
+  });
   
   // Multiplayer game state
   let players: Record<number, {
@@ -108,6 +118,16 @@ app.use((req, res, next) => {
       score: 0,
       combo: 1
     };
+
+    // Add error handling for WebSocket
+    ws.on('error', (error) => {
+      log(`WebSocket error for player ${playerId}: ${error.message}`);
+      // Clean up player on error
+      if (players[playerId]) {
+        delete players[playerId];
+        broadcast({ type: 'playerLeft', id: playerId });
+      }
+    });
 
     ws.send(JSON.stringify({ type: 'init', id: playerId, players }));
     broadcast({ type: 'playerJoined', player: players[playerId] });

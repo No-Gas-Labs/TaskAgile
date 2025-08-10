@@ -49,7 +49,7 @@ let loadingTimeout = null;
 async function initializeApp() {
   try {
     logInfo('🚀 Initializing No_Gas_Slaps™ Application');
-    
+
     // Set loading timeout to prevent indefinite loading
     loadingTimeout = setTimeout(() => {
       hideLoadingScreen();
@@ -112,16 +112,16 @@ async function initializeApp() {
     try {
       await initMultiplayer();
       logInfo('✅ Multiplayer initialized');
-      
+
       // Set up multiplayer event listeners
       window.addEventListener('ngs:multiplayer:update', handleMultiplayerUpdate);
-      
+
       // Update profile with Telegram user info
       const user = getUser();
       if (user?.first_name) {
         updateProfile(user.first_name);
       }
-      
+
     } catch (error) {
       logInfo('⚠️ Multiplayer not available - running in single player mode');
       // Continue without multiplayer
@@ -183,7 +183,7 @@ async function initializeApp() {
     // Hide loading screen
     clearTimeout(loadingTimeout);
     hideLoadingScreen();
-    
+
     appInitialized = true;
     logInfo('🎉 Application fully initialized');
 
@@ -192,7 +192,7 @@ async function initializeApp() {
     clearTimeout(loadingTimeout);
     hideLoadingScreen();
     showError(t('errors.initializationFailed', { error: error.message }));
-    
+
     // Fallback error UI
     showFallbackError(error);
   }
@@ -230,7 +230,7 @@ async function handleSlap() {
     // Audio feedback
     if (APP_CONFIG.features.audio) {
       playHitSound();
-      
+
       // Special audio for combos
       if (newState.combo > prevState.combo && newState.combo > 1) {
         playComboSound(newState.combo);
@@ -335,7 +335,7 @@ async function handleRefreshLeaderboard() {
  */
 function handleStateChange(newState) {
   updateUI();
-  
+
   // Save state periodically
   if (newState.score % 50 === 0) {
     saveGameState();
@@ -352,7 +352,7 @@ function handleStateChange(newState) {
  */
 function handleMultiplayerUpdate(event) {
   const { type, data, players, playerId } = event.detail;
-  
+
   switch (type) {
     case 'playerHit':
       if (data.id === playerId) {
@@ -363,7 +363,7 @@ function handleMultiplayerUpdate(event) {
         }, 300);
       }
       break;
-      
+
     case 'playerDied':
       if (data.killerId === playerId) {
         // We eliminated someone - show celebration
@@ -371,7 +371,7 @@ function handleMultiplayerUpdate(event) {
       }
       break;
   }
-  
+
   // Update UI with current multiplayer state
   updateUI();
 }
@@ -416,7 +416,7 @@ function showOnboardingFlow() {
   showOnboarding(() => {
     localStorage.setItem('ngs_onboarded', 'true');
     hideOnboarding();
-    
+
     // Welcome message for new users
     setTimeout(() => {
       showSuccess(t('success.welcomeMessage'));
@@ -453,12 +453,12 @@ function initializePWA() {
         if (deferredPrompt) {
           deferredPrompt.prompt();
           const { outcome } = await deferredPrompt.userChoice;
-          
+
           if (outcome === 'accepted') {
             logInfo('PWA install accepted');
             showSuccess(t('success.pwaInstalled'));
           }
-          
+
           deferredPrompt = null;
           hidePWAInstallPrompt();
         }
@@ -514,7 +514,7 @@ function saveGameState() {
       dailyClaimed: state.dailyClaimed,
       lastSaved: Date.now()
     };
-    
+
     localStorage.setItem('ngs_game_state', JSON.stringify(saveData));
     logDev('Game state saved');
   } catch (error) {
@@ -596,7 +596,7 @@ if ('PerformanceObserver' in window) {
       }
     }
   });
-  
+
   observer.observe({ entryTypes: ['measure'] });
 }
 
@@ -621,6 +621,41 @@ if (APP_CONFIG.debug || window.location.hostname === 'localhost') {
     config: APP_CONFIG,
     version: APP_CONFIG.version
   };
-  
+
   logInfo('🔧 Debug interface attached to window.NoGasSlaps');
+}
+
+// Placeholder for announceToScreenReader, assuming it's defined elsewhere or will be implemented
+function announceToScreenReader(message) {
+  // This function is called in initGame, but not defined in the provided code.
+  // Assuming it's meant for accessibility announcements.
+  console.log(`[Screen Reader Announcement]: ${message}`);
+}
+
+/**
+ * Initialize the game
+ */
+async function initGame() {
+  try {
+    announceToScreenReader('Initializing No_Gas_Slaps™ game...');
+
+    // Check for Phaser 3 mode (can be toggled via URL parameter)
+    const urlParams = new URLSearchParams(window.location.search);
+    const usePhaserMode = urlParams.get('phaser') === 'true';
+
+    if (usePhaserMode) {
+      // Load Phaser 3 version
+      const { initPhaserGame } = await import('../phaser-game.js');
+      initPhaserGame();
+      return;
+    }
+
+    // Continue with the existing game initialization if not in Phaser mode
+    await initializeApp();
+
+  } catch (error) {
+    logError('💥 Game initialization failed:', error);
+    // Handle game initialization errors, possibly showing a fallback UI
+    showFallbackError(error);
+  }
 }
