@@ -1,4 +1,4 @@
-/* No_Gas_Slaps™ - Production Stylesheet */
+/* No_Gas_Slaps™ - Mobile-Optimized Production Stylesheet */
 
 /* CSS Custom Properties for Theming */
 :root {
@@ -76,11 +76,14 @@
   --electric-blue: #ffffff;
 }
 
-/* Reset and Base Styles */
+/* Reset and Base Styles - Mobile Optimized */
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  /* Hardware acceleration for mobile */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
 }
 
 html {
@@ -88,6 +91,12 @@ html {
   -webkit-text-size-adjust: 100%;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Mobile optimizations */
+  touch-action: manipulation;
+  height: 100%;
+  overflow: hidden;
+  /* iOS safe area support */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 body {
@@ -95,11 +104,33 @@ body {
   background-color: var(--tg-bg-color);
   color: var(--tg-text-color);
   line-height: 1.6;
-  overflow-x: hidden;
+  overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  /* Mobile performance */
+  will-change: transform;
+  backface-visibility: hidden;
+  /* Prevent elastic scrolling */
+  overscroll-behavior: none;
+  /* iOS specific */
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  /* Smooth transitions only when not in motion */
   transition: background-color var(--transition-normal), color var(--transition-normal);
+}
+
+/* iOS specific fixes */
+@supports (-webkit-touch-callout: none) {
+  html {
+    height: -webkit-fill-available;
+  }
+  
+  body {
+    min-height: -webkit-fill-available;
+  }
 }
 
 /* Screen Reader Only */
@@ -1151,6 +1182,62 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Mobile Performance Optimizations */
+@media (max-width: 768px) {
+  /* Reduce complex animations on mobile */
+  .shimmer, .powerup-glow, .user-highlight {
+    animation: none !important;
+  }
+  
+  /* Simplify shadows for better performance */
+  .slap-button {
+    box-shadow: 0 4px 16px rgba(0, 255, 136, 0.3) !important;
+  }
+  
+  /* Optimize transforms */
+  .slap-button:active {
+    transform: scale(0.95) !important;
+    transition: transform 0.1s ease-out !important;
+  }
+  
+  /* Remove expensive gradients on low-end devices */
+  @media (max-resolution: 1.5dppx) {
+    .score-container::before,
+    .daily-reward::before {
+      display: none !important;
+    }
+  }
+}
+
+/* Touch-specific optimizations */
+@media (pointer: coarse) {
+  /* Larger touch targets */
+  button, .btn, .powerup-card {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Improve touch response */
+  .slap-button {
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+  }
+}
+
+/* Battery saving mode */
+@media (prefers-reduced-motion: reduce) and (max-width: 768px) {
+  /* Disable all animations to save battery */
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+  
+  /* Keep essential feedback */
+  .slap-button:active {
+    transform: scale(0.95);
   }
 }
 
