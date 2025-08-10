@@ -18,6 +18,7 @@ import { initPersistence, onSyncQueueChange } from './modules/persistence.js';
 import { runUnitTests, logDev, logError, logInfo } from './modules/testing.js';
 import { initAudio, playHitSound, playSuccessSound, playComboSound, toggleMute } from './modules/audio.js';
 import { initAnimations, triggerSlapAnimation, triggerComboAnimation, triggerPowerUpAnimation } from './modules/animations.js';
+import { initMultiplayer, sendSlap, sendMovement, getMultiplayerState, updateProfile } from './modules/multiplayer.js';
 import { loadLocalization, t } from './localization/en.js';
 
 /**
@@ -107,6 +108,25 @@ async function initializeApp() {
     await initPowerUps();
     logInfo('✅ Power-ups initialized');
 
+    // Initialize multiplayer system
+    try {
+      await initMultiplayer();
+      logInfo('✅ Multiplayer initialized');
+      
+      // Set up multiplayer event listeners
+      window.addEventListener('ngs:multiplayer:update', handleMultiplayerUpdate);
+      
+      // Update profile with Telegram user info
+      const user = getUser();
+      if (user?.first_name) {
+        updateProfile(user.first_name);
+      }
+      
+    } catch (error) {
+      logInfo('⚠️ Multiplayer not available - running in single player mode');
+      // Continue without multiplayer
+    }
+
     // Initialize UI components
     initUI({
       onSlap: handleSlap,
@@ -185,8 +205,21 @@ async function handleSlap() {
   try {
     if (!appInitialized) return;
 
+    const multiplayerState = getMultiplayerState();
     const prevState = getState();
-    await slap();
+
+    // Handle multiplayer slap
+    if (multiplayerState.connected) {
+      const slapSent = sendSlap();
+      if (!slapSent) {
+        showError('Not enough gas to slap!');
+        return;
+      }
+    } else {
+      // Single player mode
+      await slap();
+    }
+
     const newState = getState();
 
     // Visual feedback
@@ -312,6 +345,35 @@ function handleStateChange(newState) {
   if (APP_CONFIG.features.animations && newState.combo > 1) {
     triggerComboAnimation(newState.combo);
   }
+}
+
+/**
+ * Handle multiplayer events
+ */
+function handleMultiplayerUpdate(event) {
+  const { type, data, players, playerId } = event.detail;
+  
+  switch (type) {
+    case 'playerHit':
+      if (data.id === playerId) {
+        // We got hit - show screen shake effect
+        document.body.style.animation = 'shake 0.3s ease-in-out';
+        setTimeout(() => {
+          document.body.style.animation = '';
+        }, 300);
+      }
+      break;
+      
+    case 'playerDied':
+      if (data.killerId === playerId) {
+        // We eliminated someone - show celebration
+        showSuccess(`Eliminated Player ${data.id}! +200 points`);
+      }
+      break;
+  }
+  
+  // Update UI with current multiplayer state
+  updateUI();
 }
 
 /**
